@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -228,7 +228,7 @@ let rutaPrevia = null;
 function alCambiarRuta() {
   const r = ruta();
   // Advertencia discreta al salir de un grupo con alumnos pendientes
-  if (rutaPrevia && rutaPrevia.vista === 'lista' && rutaPrevia.args[0] && !(r.vista === 'lista' && r.args[0] === rutaPrevia.args[0])) {
+  if (rutaPrevia && rutaPrevia.vista === 'lista' && rutaPrevia.args[0] && !(['lista', 'trabajos', 'trabajo'].includes(r.vista) && r.args[0] === rutaPrevia.args[0])) {
     const g = rutaPrevia.args[0], f = S.fechaLista;
     const pend = alumnosDe(g).filter(s => activoEn(s, f) && !estado(s.id, f)).length;
     const gr = grupo(g);
@@ -240,7 +240,7 @@ function alCambiarRuta() {
 function render() {
   const r = ruta();
   S.vistaActual = r.vista;
-  $$('nav.bottom a').forEach(a => a.classList.toggle('activo', (a.dataset.nav === (r.vista || 'grupos')) || (a.dataset.nav === 'config' && ['importar', 'grupo', 'conflictos'].includes(r.vista))));
+  $$('nav.bottom a').forEach(a => a.classList.toggle('activo', (a.dataset.nav === (r.vista || 'grupos')) || (a.dataset.nav === 'config' && ['importar', 'grupo', 'conflictos'].includes(r.vista)) || (a.dataset.nav === 'lista' && ['trabajos', 'trabajo'].includes(r.vista))));
   const v = $('#vista');
   v.onclick = null;
   try {
@@ -251,6 +251,8 @@ function render() {
       case 'config': vistaConfig(v); break;
       case 'importar': vistaImportar(v); break;
       case 'grupo': vistaGrupo(v, r.args[0]); break;
+      case 'trabajos': vistaTrabajos(v, r.args[0]); break;
+      case 'trabajo': vistaTrabajo(v, r.args[0], r.args[1]); break;
       case 'conflictos': vistaConflictos(v); break;
       default: vistaGrupos(v);
     }
@@ -297,7 +299,7 @@ function vistaLista(v, gid) {
   const motivo = sinClaseSet().get(f);
   const modo = S.meta.orden || 'reporte';
   const inactivos = alumnosDe(gid).filter(s => !activoEn(s, f)).length;
-  v.innerHTML = `
+  v.innerHTML = `${tabsGrupo(gid, 'l')}
   <div class="cab-lista">
     <h2>${h(g.nombre)}</h2>
     <div class="fecha-sel">
@@ -453,6 +455,7 @@ function vistaGrupo(v, gid) {
       if (!await confirmar('Eliminar alumno', `Se eliminará a ${nombreCompleto(s)} y todos sus registros de asistencia. Si solo dejó de asistir, usa «Ya no viene». ¿Eliminar?`, 'Eliminar')) return;
       const cambios = [{ t: 's', id: s.id, d: s, del: true }];
       vivos('r').filter(r => r.d.s === s.id).forEach(r => cambios.push({ t: 'r', id: r.id, d: r.d, del: true }));
+      vivos('w').filter(w => w.d.s === s.id).forEach(w => cambios.push({ t: 'w', id: w.id, d: w.d, del: true }));
       await guardar(cambios); toast('Alumno eliminado.'); render();
     } else if (acc === 'agregar') {
       const nom = $('#nuevo-nombre').value.trim(); if (!nom) return;
@@ -471,6 +474,8 @@ function vistaGrupo(v, gid) {
       const cambios = [{ t: 'g', id: gid, d: g, del: true }];
       alumnosDe(gid).forEach(s => cambios.push({ t: 's', id: s.id, d: s, del: true }));
       vivos('r').filter(r => r.d.g === gid).forEach(r => cambios.push({ t: 'r', id: r.id, d: r.d, del: true }));
+      vivos('a').filter(a => a.d.g === gid).forEach(a => cambios.push({ t: 'a', id: a.id, d: a.d, del: true }));
+      vivos('w').filter(w => w.d.g === gid).forEach(w => cambios.push({ t: 'w', id: w.id, d: w.d, del: true }));
       await guardar(cambios); toast('Grupo eliminado.'); location.hash = '#/';
     }
   };
@@ -726,6 +731,167 @@ function vistaImportar(v) {
   };
 }
 
+/* ---------------- Trabajos y avances por actividad ---------------- */
+const TRAB_TXT = { T: 'Terminó', A: 'Avance', N: 'No hizo nada', '': 'Sin registrar' };
+const TRAB_MARCA = { T: 'T', A: 'AV', N: 'N' };
+function actividad(id) { const it = S.items.get('a:' + id); return it && !it.del ? it.d : null; }
+function actividadesDe(g) {
+  return vivos('a').map(i => i.d).filter(a => a.g === g)
+    .sort((x, y) => (y.entrega || '').localeCompare(x.entrega || '') || (y.creada || '').localeCompare(x.creada || ''));
+}
+function trabajo(aid, sid) { const it = S.items.get('w:' + aid + '|' + sid); return it && !it.del ? it.d : null; }
+function estTrab(aid, sid) { const w = trabajo(aid, sid); return w ? w.e || '' : ''; }
+function fechaRefActividad(a) { const f = hoy(); return a.entrega && a.entrega < f ? a.entrega : f; }
+function alumnosDeActividad(a) {
+  const ref = fechaRefActividad(a);
+  return ordenar(alumnosDe(a.g).filter(s => activoEn(s, ref) || estTrab(a.id, s.id)), S.meta.orden || 'reporte');
+}
+function contarTrab(a, lista) {
+  const c = { T: 0, A: 0, N: 0, p: 0 };
+  lista.forEach(s => { const e = estTrab(a.id, s.id); if (e) c[e]++; else c.p++; });
+  return c;
+}
+function tabsGrupo(gid, activo) {
+  const g = encodeURIComponent(gid);
+  return `<div class="tabs" role="tablist"><a role="tab" href="#/lista/${g}" class="${activo === 'l' ? 'activo' : ''}" aria-selected="${activo === 'l'}">✓ Asistencia</a><a role="tab" href="#/trabajos/${g}" class="${activo === 't' ? 'activo' : ''}" aria-selected="${activo === 't'}">📝 Trabajos</a></div>`;
+}
+async function dialogoActividad(gid, a) {
+  const r = await dialogo({
+    titulo: a ? 'Editar actividad' : 'Nueva actividad', ok: a ? 'Guardar' : 'Crear',
+    html: `<label class="campo"><span>Nombre de la actividad</span><input type="text" name="nombre" maxlength="120" required value="${h(a ? a.nombre : '')}" placeholder="Ej. Práctica 3 de Word"></label>
+      <label class="campo"><span>Fecha de entrega</span><input type="date" name="entrega" required value="${h(a ? a.entrega : hoy())}"></label>`
+  });
+  if (!r) return null;
+  const nombre = r.querySelector('[name=nombre]').value.trim();
+  const entrega = r.querySelector('[name=entrega]').value;
+  if (!nombre || !entrega) { toast('Escribe el nombre y la fecha de entrega.'); return null; }
+  const id = a ? a.id : 'a' + aleatorio(8);
+  const d = { ...(a || {}), id, g: gid, m: a ? (a.m || 'TEC') : 'TEC', nombre, entrega, creada: a ? a.creada : hoy() };
+  await guardar([{ t: 'a', id, d }]);
+  return d;
+}
+function vistaTrabajos(v, gid) {
+  const g = grupo(gid);
+  if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
+  if (S.meta.ultimoGrupo !== gid) setMeta('ultimoGrupo', gid);
+  $('#titulo').textContent = 'Trabajos · ' + g.nombre;
+  const acts = actividadesDe(gid), f = hoy();
+  v.innerHTML = `${tabsGrupo(gid, 't')}
+  <div class="cab-lista"><h2>${h(g.nombre)}</h2><button class="btn primary" data-acc="nueva">+ Nueva actividad</button></div>
+  ${acts.length ? `<ul class="lista-act">${acts.map(a => {
+    const c = contarTrab(a, alumnosDeActividad(a));
+    const venc = a.entrega < f;
+    return `<li><a class="act" href="#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(a.id)}">
+      <b>${h(a.nombre)}</b>
+      <span class="tenue">Entrega: ${h(fmtLargo(a.entrega))}${a.entrega === f ? ' (hoy)' : venc ? ' · vencida' : ''}</span>
+      <span class="mini"><span class="m-T">✓ ${c.T} terminaron</span><span class="m-A">◐ ${c.A} avance</span><span class="m-N">✗ ${c.N} nada</span><span class="m-p">${c.p} sin registrar</span></span></a></li>`;
+  }).join('')}</ul>` : `<div class="card"><p>Aún no hay actividades en ${h(g.nombre)}.</p><p class="tenue">Crea una con «+ Nueva actividad», ponle su fecha de entrega y marca quién terminó, quién avanzó y quién no hizo nada.</p></div>`}`;
+  v.onclick = async ev => {
+    const b = ev.target.closest('[data-acc]'); if (!b) return;
+    if (b.dataset.acc === 'nueva') {
+      const a = await dialogoActividad(gid);
+      if (a) location.hash = `#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(a.id)}`;
+    }
+  };
+}
+function vistaTrabajo(v, gid, aid) {
+  const g = grupo(gid), a = actividad(aid);
+  if (!g || !a) { v.innerHTML = `<div class="error">Esa actividad no existe o fue eliminada.</div><p><a href="#/trabajos/${encodeURIComponent(gid || '')}">← Volver a las actividades</a></p>`; return; }
+  $('#titulo').textContent = 'Trabajos · ' + g.nombre;
+  const modo = S.meta.orden || 'reporte';
+  const venc = a.entrega < hoy();
+  v.innerHTML = `${tabsGrupo(gid, 't')}
+  <p style="margin:.2rem 0 .5rem"><a href="#/trabajos/${encodeURIComponent(gid)}">← Todas las actividades de ${h(g.nombre)}</a></p>
+  <div class="card"><h2 style="margin-bottom:.2rem">${h(a.nombre)}</h2>
+    <p style="margin:.2rem 0 .6rem">Entrega: <b>${h(fmtLargo(a.entrega))}</b>${venc ? ' · <b>fecha vencida</b>' : ''}</p>
+    <div class="fila"><button class="btn small" data-acc="editar">Editar nombre o fecha</button><button class="btn small danger" data-acc="borrar">Eliminar actividad</button></div></div>
+  <div class="contadores c4" id="contadores"></div>
+  <div class="herr">
+    <input type="search" id="buscar" placeholder="Buscar alumno…" value="${h(S.busqueda)}" aria-label="Buscar por nombre">
+    <button class="btn" data-acc="orden">${modo === 'az' ? 'Orden: A–Z' : 'Orden: reporte'}</button>
+  </div>
+  <ul class="alumnos" id="alumnos"></ul>
+  <p class="tenue">Toca de nuevo el mismo botón para regresar a «Sin registrar». Si marcas «Terminó» después de la fecha de entrega, se anota como entrega tardía.</p>`;
+  pintarTrabajos(a);
+  $('#buscar').oninput = e => { S.busqueda = e.target.value; pintarTrabajos(a); };
+  v.onclick = async ev => {
+    const b = ev.target.closest('[data-acc]'); if (!b) return;
+    const acc = b.dataset.acc;
+    if (acc === 'wT' || acc === 'wA' || acc === 'wN') marcarTrab(aid, b.dataset.s, acc.slice(1));
+    else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
+    else if (acc === 'editar') { if (await dialogoActividad(gid, actividad(aid))) render(); }
+    else if (acc === 'borrar') {
+      const ws = vivos('w').filter(w => w.d.a === aid);
+      if (!await confirmar('Eliminar actividad', `Se eliminará «${a.nombre}» y sus ${ws.filter(w => w.d.e).length} registro(s) de trabajo. ¿Eliminar?`, 'Eliminar')) return;
+      await guardar([{ t: 'a', id: aid, d: a, del: true }, ...ws.map(w => ({ t: 'w', id: w.id, d: w.d, del: true }))]);
+      toast('Actividad eliminada.'); location.hash = '#/trabajos/' + encodeURIComponent(gid);
+    }
+  };
+}
+function filaTrab(s, i, a) {
+  const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
+  const tarde = e === 'T' && w.f && w.f > a.entrega;
+  const cls = e ? 'w' + e : 'N0';
+  const btn = (k, txt) => `<button class="b-est w${k}" data-acc="w${k}" data-s="${h(s.id)}" aria-pressed="${e === k}">${e === k ? '● ' : ''}${txt}</button>`;
+  return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
+    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${e && w.f ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
+    <div class="botones">${btn('T', 'Terminó')}${btn('A', 'Avance')}${btn('N', 'Nada')}</div></li>`;
+}
+function pintarTrabajos(a) {
+  const q = claveNombre(S.busqueda), lista = alumnosDeActividad(a);
+  const ul = $('#alumnos'); if (!ul) return;
+  ul.innerHTML = lista.map((s, i) => q && !claveNombre(nombreCompleto(s)).includes(q) ? '' : filaTrab(s, i + 1, a)).join('')
+    || `<li class="tenue">${lista.length ? 'Ningún alumno coincide con la búsqueda.' : 'No hay alumnos activos.'}</li>`;
+  pintarContTrab(a);
+}
+function pintarContTrab(a) {
+  const c = contarTrab(a, alumnosDeActividad(a)), el = $('#contadores'); if (!el) return;
+  el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
+}
+async function marcarTrab(aid, sid, e) {
+  const a = actividad(aid), s = alumno(sid); if (!a || !s) return;
+  const nuevo = estTrab(aid, sid) === e ? '' : e;
+  await guardar([{ t: 'w', id: aid + '|' + sid, d: { a: aid, s: sid, g: a.g, e: nuevo, f: hoy() } }]);
+  const li = document.getElementById('al-' + sid);
+  if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaTrab(s, n, a); }
+  pintarContTrab(a);
+}
+function datosTrabajos(gid, anio, mes) {
+  const g = grupo(gid);
+  const pref = `${anio}-${String(mes + 1).padStart(2, '0')}-`;
+  const acts = actividadesDe(gid).filter(a => (a.entrega || '').startsWith(pref)).sort((x, y) => x.entrega.localeCompare(y.entrega) || x.nombre.localeCompare(y.nombre));
+  const ini = ymd(new Date(anio, mes, 1));
+  const alumnos = ordenar(alumnosDe(gid), S.meta.orden || 'reporte').filter(s => {
+    const b = bajaVigente(s);
+    return !(b && b.desde < ini && !acts.some(a => estTrab(a.id, s.id)));
+  });
+  const filas = alumnos.map(s => {
+    const t = { T: 0, A: 0, N: 0 };
+    const celdas = acts.map(a => {
+      const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
+      if (e) { t[e]++; const tarde = e === 'T' && w.f && w.f > a.entrega; return { m: TRAB_MARCA[e] + (tarde ? '*' : ''), c: 'w' + e }; }
+      if (bajaEn(s, a.entrega)) return { m: 'B', c: 'b' };
+      return { m: '–', c: 'sr' };
+    });
+    return { s, celdas, t, baja: bajaVigente(s) };
+  });
+  return { g, acts, filas, omitidos: alumnosDe(gid).length - alumnos.length, periodo: `${MESES[mes]} ${anio}` };
+}
+function htmlTrabajos(dat) {
+  const c = config();
+  const { g, acts, filas, periodo } = dat;
+  const n = acts.length;
+  return `<section class="rep-pagina rep">
+    <div class="rep-cab"><div>${c.escuela ? `<p>${h(c.escuela)}</p>` : ''}<h3>Concentrado de trabajos · ${h(g.nombre)}</h3></div><p><b>Entregas de:</b> ${h(periodo)}</p></div>
+    <table class="rep-t"><thead><tr><th colspan="${n + 5}" class="tcab">${h(g.nombre)} · trabajos · ${h(periodo)}</th></tr>
+      <tr><th>No.</th><th style="text-align:left">Alumno</th>${acts.map((a, i) => `<th class="dia" title="${h(a.nombre)}">${i + 1}</th>`).join('')}<th>Termin.</th><th>Avance</th><th>Nada</th></tr></thead>
+    <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.baja ? `<small>Ya no viene desde ${fmtF(r.baja.desde)}</small>` : ''}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.t.T}/${n}</td><td class="tot">${r.t.A}</td><td class="tot">${r.t.N}</td></tr>`).join('') : `<tr><td colspan="${n + 5}">Sin alumnos</td></tr>`}</tbody></table>
+    ${n ? `<p class="rep-ley"><b>Actividades:</b> ${acts.map((a, i) => `<b>${i + 1}</b> = ${h(a.nombre)} (entrega ${fmtF(a.entrega)})`).join(' · ')}</p>` : '<p class="rep-ley"><b>No hay actividades con fecha de entrega en este mes.</b></p>'}
+    <p class="rep-ley">T = terminó · T* = terminó después de la fecha de entrega · AV = avance · N = no hizo nada · – = sin registrar · B = ya no viene.${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
+    <div class="rep-firma"><div>Nombre del docente${c.docente ? `: <b>${h(c.docente)}</b>` : ''}</div><div>Firma</div></div>
+  </section>`;
+}
+
 /* ---------------- Concentrado mensual ---------------- */
 function fechasDelMes(gid, anio, mes) {
   const sc = sinClaseSet(), r = new Set();
@@ -776,7 +942,7 @@ function vistaReporte(v) {
   const gs = grupos();
   if (!gs.length) { v.innerHTML = '<div class="card">Primero importa tus grupos.</div>'; return; }
   const d = new Date();
-  const sel = S.selReporte || (S.selReporte = { g: S.meta.ultimoGrupo && grupo(S.meta.ultimoGrupo) ? S.meta.ultimoGrupo : gs[0].id, anio: d.getFullYear(), mes: d.getMonth() });
+  const sel = S.selReporte || (S.selReporte = { tipo: 'asis', g: S.meta.ultimoGrupo && grupo(S.meta.ultimoGrupo) ? S.meta.ultimoGrupo : gs[0].id, anio: d.getFullYear(), mes: d.getMonth() });
   const anios = []; for (let a = d.getFullYear() - 2; a <= d.getFullYear() + 1; a++) anios.push(a);
   const pend = S.outbox.size, conf = S.conflicts.size;
   const ultima = S.meta.ultimaSync ? new Date(S.meta.ultimaSync) : null;
@@ -785,6 +951,7 @@ function vistaReporte(v) {
   else if (syncConfigurado() && ultima && Date.now() - ultima > 6 * 3600e3) aviso = `<div class="aviso">Última sincronización: ${fmtHora(ultima)}. Si capturaste en otro dispositivo después, sincroniza antes de imprimir.</div>`;
   v.innerHTML = `
   <div class="card"><h2>Concentrado mensual</h2>
+    <div class="tabs" id="r-tipo"><a href="javascript:void 0" data-t="asis" class="${sel.tipo === 'asis' ? 'activo' : ''}">✓ Asistencia</a><a href="javascript:void 0" data-t="trab" class="${sel.tipo === 'trab' ? 'activo' : ''}">📝 Trabajos</a></div>
     <div class="fila">
       <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Los ${gs.length} grupos</option>${gs.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(g.nombre)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1;min-width:140px"><span>Mes</span><select id="r-m">${MESES.map((m, i) => `<option value="${i}" ${sel.mes === i ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
@@ -796,15 +963,28 @@ function vistaReporte(v) {
   </div>
   <div class="card scroll" id="r-prev"></div>`;
   const ids = () => sel.g === '*' ? gs.map(g => g.id) : [sel.g];
-  const datos = () => ids().map(id => datosConcentrado(id, sel.anio, sel.mes));
-  const pintar = () => { $('#r-prev').innerHTML = datos().map(htmlConcentrado).join('<hr>'); };
+  const esTrab = () => sel.tipo === 'trab';
+  const datos = () => ids().map(id => esTrab() ? datosTrabajos(id, sel.anio, sel.mes) : datosConcentrado(id, sel.anio, sel.mes));
+  const pintar = () => { $('#r-prev').innerHTML = datos().map(esTrab() ? htmlTrabajos : htmlConcentrado).join('<hr>'); };
+  $$('#r-tipo a').forEach(a => a.onclick = e => { e.preventDefault(); sel.tipo = a.dataset.t; render(); });
   pintar();
   $('#r-g').onchange = e => { sel.g = e.target.value; pintar(); };
   $('#r-m').onchange = e => { sel.mes = Number(e.target.value); pintar(); };
   $('#r-a').onchange = e => { sel.anio = Number(e.target.value); pintar(); };
-  $('#r-imprimir').onclick = () => imprimir(datos());
+  $('#r-imprimir').onclick = () => imprimir(datos(), esTrab() ? htmlTrabajos : htmlConcentrado, esTrab() ? 'acts' : 'fechas');
   $('#r-csv').onclick = () => {
     const filas = [];
+    if (esTrab()) {
+      datos().forEach(dat => {
+        filas.push([`${dat.g.nombre} — trabajos con entrega en ${dat.periodo}`]);
+        filas.push(['No.', 'ID', 'Alumno', ...dat.acts.map(a => `${a.nombre} (${fmtF(a.entrega)})`), 'Terminados', 'Avances', 'No hizo nada', 'Ya no viene desde']);
+        dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.t.T, r.t.A, r.t.N, r.baja ? fmtF(r.baja.desde) : '']));
+        filas.push([]);
+      });
+      filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene']);
+      descargar(`trabajos_${sel.g === '*' ? 'todos' : sel.g}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+      return;
+    }
     datos().forEach(dat => {
       filas.push([`${dat.g.nombre} — ${dat.periodo}`]);
       filas.push(['No.', 'ID', 'Alumno', ...dat.fechas.map(fmtF), 'Total asistencias', 'Total faltas', 'Ya no viene desde']);
@@ -815,13 +995,13 @@ function vistaReporte(v) {
     descargar(`concentrado_${sel.g === '*' ? 'todos' : sel.g}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
   };
 }
-function imprimir(lista) {
-  const maxCols = Math.max(0, ...lista.map(d => d.fechas.length));
+function imprimir(lista, plantilla = htmlConcentrado, campo = 'fechas') {
+  const maxCols = Math.max(0, ...lista.map(d => d[campo].length));
   const horizontal = maxCols > 8;
   let st = $('#estilo-pagina');
   if (!st) { st = document.createElement('style'); st.id = 'estilo-pagina'; document.head.appendChild(st); }
   st.textContent = `@page{size:letter ${horizontal ? 'landscape' : 'portrait'};margin:10mm}`;
-  $('#impresion').innerHTML = lista.map(htmlConcentrado).join('');
+  $('#impresion').innerHTML = lista.map(plantilla).join('');
   setTimeout(() => window.print(), 50);
 }
 
@@ -833,6 +1013,8 @@ function describir(k, val) {
   if (k.startsWith('r:')) return ESTADO_TXT[d.e || ''];
   if (k.startsWith('s:')) { const b = (d.bajas || []).find(x => !x.hasta); return `${nombreCompleto(d)} · ${b ? 'Ya no viene desde ' + fmtF(b.desde) : 'Activo'}`; }
   if (k.startsWith('g:')) return `${d.nombre} · días: ${(d.dias || []).map(x => DIAS[x].slice(0, 3)).join(', ') || 'ninguno'}`;
+  if (k.startsWith('w:')) return TRAB_TXT[d.e || ''];
+  if (k.startsWith('a:')) return `${d.nombre} · entrega ${fmtF(d.entrega)}`;
   return 'Configuración general';
 }
 function tituloConflicto(c) {
@@ -840,6 +1022,8 @@ function tituloConflicto(c) {
   if (c.k.startsWith('r:')) { const s = alumno(d.s); const g = grupo(d.g); return `${g ? g.nombre + ' · ' : ''}${s ? nombreCompleto(s) : d.s} · ${fmtLargo(d.f)}`; }
   if (c.k.startsWith('s:')) return 'Datos del alumno ' + nombreCompleto(d);
   if (c.k.startsWith('g:')) return 'Datos del grupo ' + (d.nombre || '');
+  if (c.k.startsWith('w:')) { const s = alumno(d.s), a = actividad(d.a); return `Trabajo «${a ? a.nombre : ''}» · ${s ? nombreCompleto(s) : d.s}`; }
+  if (c.k.startsWith('a:')) return 'Actividad ' + (d.nombre || '');
   return 'Configuración general';
 }
 function vistaConflictos(v) {
@@ -1025,6 +1209,14 @@ async function restaurarRespaldo(file) {
   programarSync(500);
   return true;
 }
+function exportarTrabajosCSV() {
+  const filas = [['Grupo', 'Actividad', 'Fecha de entrega', 'ID alumno', 'Alumno', 'Estado', 'Fecha en que se marcó', 'Entrega tardía']];
+  vivos('w').filter(w => w.d.e).map(w => w.d).sort((a, b) => (a.g + a.a).localeCompare(b.g + b.a)).forEach(w => {
+    const a = actividad(w.a), s = alumno(w.s), g = grupo(w.g); if (!a) return;
+    filas.push([g ? g.nombre : w.g, a.nombre, a.entrega, w.s, s ? nombreCompleto(s) : '(eliminado)', TRAB_TXT[w.e], w.f || '', w.e === 'T' && w.f > a.entrega ? 'Sí' : '']);
+  });
+  descargar(`trabajos_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+}
 function exportarRegistrosCSV() {
   const filas = [['Grupo', 'ID alumno', 'Alumno', 'Fecha', 'Estado', 'Ya no viene desde']];
   const regs = vivos('r').filter(r => r.d.e).sort((a, b) => (a.d.g + a.d.f).localeCompare(b.d.g + b.d.f));
@@ -1077,7 +1269,8 @@ function vistaConfig(v) {
     <p class="tenue">${ultR ? 'Último respaldo en este dispositivo: ' + h(fmtHora(ultR)) : 'Aún no has creado un respaldo en este dispositivo.'} Guarda el archivo en una memoria USB, tu correo o Google Drive.</p>
     <div class="fila"><button class="btn primary" id="resp-crear">Crear respaldo completo</button>
     <label class="btn" style="display:inline-flex;align-items:center">Restaurar respaldo<input type="file" id="resp-rest" accept=".json,application/json" hidden></label>
-    <button class="btn" id="csv-todo">Exportar todos los registros (CSV)</button></div>
+    <button class="btn" id="csv-todo">Exportar todos los registros (CSV)</button>
+    <button class="btn" id="csv-trab">Exportar todos los trabajos (CSV)</button></div>
   </div>
   <div class="card"><h2>Este dispositivo</h2>
     <p class="tenue">Versión ${APP_VERSION} · ID del dispositivo: ${h(S.meta.deviceId)} · <span id="almac"></span></p>
@@ -1117,6 +1310,7 @@ function vistaConfig(v) {
     try { if (await restaurarRespaldo(f)) { toast('Respaldo restaurado.'); render(); } } catch (err) { toast(err.message, { ms: 8000 }); }
   };
   on('csv-todo', exportarRegistrosCSV);
+  on('csv-trab', exportarTrabajosCSV);
 }
 
 /* ---------------- Arranque ---------------- */

@@ -136,3 +136,29 @@ table.rep-t td.tot{font-weight:700}
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
 table.rep-t th.tcab{text-align:left;font-size:9pt;font-weight:600;background:#fff;border:0;border-bottom:1px solid #333;padding:0 0 2px}
+/* Pestañas Asistencia / Trabajos */
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;background:#e3e8ee;border-radius:12px;padding:.25rem;margin-bottom:.7rem}
+.tabs a{display:flex;align-items:center;justify-content:center;min-height:44px;border-radius:9px;text-decoration:none;color:var(--tenue);font-weight:600}
+.tabs a.activo{background:#fff;color:var(--azul);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+/* Trabajos */
+.lista-act{list-style:none;padding:0;margin:0}
+.lista-act a.act{display:flex;flex-direction:column;gap:.2rem;background:#fff;border:1px solid var(--borde);border-left:6px solid var(--azul);border-radius:10px;padding:.7rem;margin-bottom:.5rem;text-decoration:none;color:var(--texto)}
+.lista-act b{font-size:1.05rem}
+.mini{display:flex;flex-wrap:wrap;gap:.3rem .8rem;font-size:.85rem;font-weight:600}
+.m-T{color:var(--verde)}.m-A{color:var(--ambar)}.m-N{color:var(--rojo)}.m-p{color:var(--gris)}
+.contadores.c4{grid-template-columns:repeat(4,1fr)}
+.contador.av{background:var(--ambar-f);border-color:var(--ambar);color:var(--ambar)}
+.b-est.wT{border-color:var(--verde);color:var(--verde)}
+.b-est.wA{border-color:var(--ambar);color:var(--ambar)}
+.b-est.wN{border-color:var(--rojo);color:var(--rojo)}
+.b-est.wT[aria-pressed=true]{background:var(--verde);color:#fff}
+.b-est.wA[aria-pressed=true]{background:var(--ambar);color:#fff}
+.b-est.wN[aria-pressed=true]{background:var(--rojo);color:#fff}
+.alumno.st-wT{border-left-color:var(--verde)}
+.alumno.st-wA{border-left-color:var(--ambar)}
+.alumno.st-wN{border-left-color:var(--rojo)}
+.estado-txt.wT{background:var(--verde-f);color:var(--verde)}
+.estado-txt.wA{background:var(--ambar-f);color:var(--ambar)}
+.estado-txt.wN{background:var(--rojo-f);color:var(--rojo)}
+table.rep-t td.wN{font-weight:700}
+@media(max-width:400px){.contadores.c4 .contador{font-size:.72rem}}

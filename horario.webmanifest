@@ -1,0 +1,14 @@
+{
+  "name": "Mi horario",
+  "short_name": "Horario",
+  "lang": "es-MX",
+  "start_url": "./horario.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f3f8",
+  "theme_color": "#5b2a86",
+  "icons": [
+    { "src": "icons/horario-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/horario-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

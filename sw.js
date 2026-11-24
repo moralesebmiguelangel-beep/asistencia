@@ -1,6 +1,6 @@
 /* Service worker: guarda la aplicación para abrirla sin internet. */
-const VERSION = 'asistencia-v1.0.0';
-const ARCHIVOS = ['./', 'index.html', 'app.js', 'app.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+const VERSION = 'asistencia-v1.1.0';
+const ARCHIVOS = ['./', 'index.html', 'app.js', 'app.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'horario.html', 'horario.webmanifest', 'icons/horario-192.png', 'icons/horario-512.png', 'icons/horario-apple.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(ARCHIVOS)));
