@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '2.0.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -167,17 +167,47 @@ function ordenar(lista, modo) {
 function activoEn(s, f) { return !(s.bajas || []).some(b => b.desde <= f && (!b.hasta || f < b.hasta)); }
 function bajaVigente(s) { return (s.bajas || []).find(b => !b.hasta) || null; }
 function bajaEn(s, f) { return (s.bajas || []).find(b => b.desde <= f && (!b.hasta || f < b.hasta)) || null; }
-function estado(sid, f) { const it = S.items.get('r:' + sid + '|' + f); return it && !it.del ? (it.d.e || '') : ''; }
+/* ---- Escuelas y materias ---- */
+const ESCUELAS_PRECARGADAS = [
+  { id: '202', corto: 'EST 202', nombre: 'Escuela Secundaria Técnica No. 202 “Gustavo Baz Prada”' },
+  { id: '184', corto: 'EST 184', nombre: 'Escuela Secundaria Técnica No. 184 “Profr. Carlos Hank González”', cct: '15DST0194O' },
+];
+const ORDEN_MAT = ['TEC', 'ART', 'TUT'];
+function escuelas() { const e = config().escuelas; return Array.isArray(e) && e.length ? e : ESCUELAS_PRECARGADAS; }
+function escuela(id) { return escuelas().find(e => e.id === id) || { id, corto: 'Escuela ' + id, nombre: 'Escuela ' + id }; }
+function escDe(gid) { const g = grupo(gid); if (g && g.esc) return g.esc; const p = String(gid).split('-'); return p.length > 1 ? p[0] : '202'; }
+function escuelasEnUso() { const s = new Set(grupos().map(g => g.esc || '202')); return escuelas().filter(e => s.has(e.id)); }
+function nombreEscuelaReporte(esc) { return esc === '202' ? (config().escuela || escuela('202').nombre) : escuela(esc).nombre; }
+function nombreGrupoL(gid) { const n = nombreGrupoH(gid); return escuelasEnUso().length > 1 || escDe(gid) !== '202' ? `${n} · ${escuela(escDe(gid)).corto}` : n; }
+function matDe(d) { return (d && d.m) || 'TEC'; }
+function materiasDe(gid) {
+  const esc = escDe(gid), set = new Set();
+  Object.values(horarioEsc(esc).clases || {}).forEach(c => { if (c.g === gid) set.add(c.m); });
+  if (!set.size && esc === '202') set.add('TEC');
+  return ORDEN_MAT.filter(m => set.has(m)).concat([...set].filter(m => !ORDEN_MAT.includes(m)));
+}
+function diasDe(gid, m) {
+  const ds = new Set();
+  Object.entries(horarioEsc(escDe(gid)).clases || {}).forEach(([k, c]) => { if (c.g === gid && c.m === m) ds.add(Number(k.split('-')[0])); });
+  if (!ds.size && m === 'TEC') { const g = grupo(gid); (g && g.dias || []).forEach(d => ds.add(d)); }
+  return [...ds].sort();
+}
+function clasesDelDia(gid, d) {   // [{m, n, ini}] de un grupo en un día de la semana, en orden de hora
+  const hz = horarioEsc(escDe(gid));
+  return (hz.modulos || []).filter(x => x.n !== 'R').map(x => ({ x, c: hz.clases[d + '-' + x.n] })).filter(o => o.c && o.c.g === gid).map(o => ({ m: o.c.m, n: o.x.n, ini: o.x.ini }));
+}
+function materiaDeHoy(gid, f = hoy()) { const cs = clasesDelDia(gid, aFecha(f).getDay()); return cs.length ? cs[0].m : null; }
+function sufMat(m) { return !m || m === 'TEC' ? '' : '|' + m; }
+function estado(sid, f, m = 'TEC') { const it = S.items.get('r:' + sid + '|' + f + sufMat(m)); return it && !it.del ? (it.d.e || '') : ''; }
 function sinClaseSet() { return new Map((config().sinClase || []).map(x => [x.f, x.m])); }
-function esDiaDeClase(g, f, sc = sinClaseSet()) {
+function esDiaDeClase(g, f, sc = sinClaseSet(), m = 'TEC') {
   const gr = grupo(g); if (!gr) return false;
   const c = config();
   if (c.inicio && f < c.inicio) return false;
   if (c.fin && f > c.fin) return false;
-  return (gr.dias || []).includes(aFecha(f).getDay()) && !sc.has(f);
+  return diasDe(g, m).includes(aFecha(f).getDay()) && !sc.has(f);
 }
-function cambiarEstado(s, f, e) { return { t: 'r', id: s.id + '|' + f, d: { s: s.id, g: s.g, f, e } }; }
-
+function cambiarEstado(s, f, e, m = 'TEC') { const d = { s: s.id, g: s.g, f, e }; if (m && m !== 'TEC') d.m = m; return { t: 'r', id: s.id + '|' + f + sufMat(m), d }; }
 /* ---------------- Interfaz general ---------------- */
 function toast(msg, opc = {}) {
   const cont = $('#toasts');
@@ -229,12 +259,12 @@ function ruta() { const p = (location.hash || '#/').slice(2).split('/').map(deco
 let rutaPrevia = null;
 function alCambiarRuta() {
   const r = ruta();
-  // Advertencia discreta al salir de un grupo con alumnos pendientes
-  if (rutaPrevia && rutaPrevia.vista === 'lista' && rutaPrevia.args[0] && !(['lista', 'trabajos', 'trabajo'].includes(r.vista) && r.args[0] === rutaPrevia.args[0])) {
-    const g = rutaPrevia.args[0], f = S.fechaLista;
-    const pend = alumnosDe(g).filter(s => activoEn(s, f) && !estado(s.id, f)).length;
-    const gr = grupo(g);
-    if (gr && pend > 0) toast(`${gr.nombre}: quedaron ${pend} sin registrar.`, { accion: 'Volver', alPulsar: () => { location.hash = '#/lista/' + encodeURIComponent(g); }, ms: 6000 });
+  // Advertencia discreta al salir de una lista con alumnos pendientes
+  const ant = rutaPrevia;
+  if (ant && ant.vista === 'lista' && ant.args[0] && !(['lista', 'trabajos', 'trabajo'].includes(r.vista) && r.args[0] === ant.args[0])) {
+    const g = ant.args[0], f = S.fechaLista, m = S.mat || 'TEC';
+    const pend = alumnosDe(g).filter(s => activoEn(s, f) && !estado(s.id, f, m)).length;
+    if (grupo(g) && pend > 0 && !listaBloqueada(g, f, m)) toast(`${nombreGrupoL(g)} · ${nombreMateria(m, g)}: quedaron ${pend} sin registrar.`, { accion: 'Volver', alPulsar: () => { location.hash = '#/lista/' + encodeURIComponent(g) + '/' + m; }, ms: 6000 });
   }
   rutaPrevia = r;
   render();
@@ -248,7 +278,7 @@ function render() {
   try {
     switch (r.vista) {
       case '': case 'grupos': vistaGrupos(v); break;
-      case 'lista': vistaLista(v, r.args[0]); break;
+      case 'lista': vistaLista(v, r.args[0], r.args[1]); break;
       case 'reporte': vistaReporte(v); break;
       case 'config': vistaConfig(v); break;
       case 'importar': vistaImportar(v); break;
@@ -274,18 +304,24 @@ function vistaGrupos(v) {
       <p class="tenue">¿Ya los importaste en otro dispositivo? Ve a <a href="#/config">Configuración → Sincronización</a> y vincula este dispositivo para descargarlos.</p></div>`;
     return;
   }
-  const f = hoy(), sc = sinClaseSet();
-  v.innerHTML = `<p class="tenue" style="margin-top:0">${h(fmtLargo(f))}</p><div class="grupos">` + gs.map(g => {
+  const f = hoy(), sc = sinClaseSet(), d = aFecha(f).getDay(), escs = escuelasEnUso();
+  const boton = g => {
     const act = alumnosDe(g.id).filter(s => activoEn(s, f));
-    const reg = act.filter(s => estado(s.id, f)).length;
-    const clase = esDiaDeClase(g.id, f, sc);
-    const linea = reg === act.length && act.length ? `<small class="hecho">✓ Lista de hoy completa</small>` : `<small>Hoy: ${reg} de ${act.length} registrados</small>`;
-    return `<a class="grupo-btn" href="#/lista/${encodeURIComponent(g.id)}"><strong>${h(g.nombre)}</strong>${linea}<small>${act.length} alumnos activos${clase ? '' : ' · hoy sin clase'}</small></a>`;
-  }).join('') + '</div>';
+    const hoyM = [...new Set(clasesDelDia(g.id, d).map(c => c.m))].filter(m => esDiaDeClase(g.id, f, sc, m));
+    const lineas = hoyM.map(m => {
+      const reg = act.filter(s => estado(s.id, f, m)).length;
+      return reg === act.length && act.length ? `<small class="hecho">✓ ${h(nombreMateria(m, g.id))}: lista completa</small>` : `<small>Hoy ${h(nombreMateria(m, g.id))}: ${reg} de ${act.length}</small>`;
+    }).join('');
+    const mats = materiasDe(g.id).map(m => nombreMateria(m, g.id)).join(' · ');
+    return `<a class="grupo-btn" href="#/lista/${encodeURIComponent(g.id)}${hoyM.length ? '/' + hoyM[0] : ''}"><strong>${h(g.nombre)}</strong>${lineas || '<small>Hoy sin clase</small>'}<small>${act.length} alumnos · ${h(mats)}</small></a>`;
+  };
+  v.innerHTML = `<p class="tenue" style="margin-top:0">${h(fmtLargo(f))}</p>` + escs.map(e => {
+    const lista = gs.filter(g => (g.esc || '202') === e.id);
+    return `${escs.length > 1 ? `<h2 class="esc-tit">${h(e.corto)}</h2>` : ''}<div class="grupos">${lista.map(boton).join('')}</div>`;
+  }).join('');
 }
-
 /* ---------------- Vista: Pasar lista ---------------- */
-function vistaLista(v, gid) {
+function vistaLista(v, gid, mArg) {
   if (!gid) {
     const ult = S.meta.ultimoGrupo;
     if (ult && grupo(ult)) { location.replace('#/lista/' + encodeURIComponent(ult)); return; }
@@ -296,54 +332,60 @@ function vistaLista(v, gid) {
   const g = grupo(gid);
   if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
   if (S.meta.ultimoGrupo !== gid) setMeta('ultimoGrupo', gid);
-  $('#titulo').textContent = 'Pasar lista · ' + g.nombre;
   const f = S.fechaLista;
-  const clase = esDiaDeClase(gid, f);
+  const mats = materiasDe(gid);
+  const m = mats.includes(mArg) ? mArg : (materiaDeHoy(gid, f) && mats.includes(materiaDeHoy(gid, f)) ? materiaDeHoy(gid, f) : (mats[0] || 'TEC'));
+  S.mat = m;
+  const nm = nombreMateria(m, gid);
+  $('#titulo').textContent = 'Pasar lista · ' + g.nombre;
+  const clase = esDiaDeClase(gid, f, sinClaseSet(), m);
   const motivo = sinClaseSet().get(f);
   const modo = S.meta.orden || 'reporte';
   const inactivos = alumnosDe(gid).filter(s => !activoEn(s, f)).length;
+  const bloq = listaBloqueada(gid, f, m);
   v.innerHTML = `${tabsGrupo(gid, 'l')}
+  ${mats.length > 1 ? `<div class="mats" role="tablist">${mats.map(x => `<a role="tab" href="#/lista/${encodeURIComponent(gid)}/${x}" class="mat-${x} ${x === m ? 'activo' : ''}" aria-selected="${x === m}">${h(nombreMateria(x, gid))}</a>`).join('')}</div>` : ''}
   <div class="cab-lista">
-    <h2>${h(g.nombre)}</h2>
+    <h2>${h(g.nombre)} <span class="sub-mat mat-${m}">${h(nm)}</span>${escuelasEnUso().length > 1 ? `<span class="sub-esc">${h(escuela(escDe(gid)).corto)}</span>` : ''}</h2>
     <div class="fecha-sel">
       <button class="btn" data-acc="dia-ant" aria-label="Día de clase anterior">◀</button>
       <input type="date" id="fecha" value="${f}" aria-label="Fecha de la lista">
       <button class="btn" data-acc="dia-sig" aria-label="Día de clase siguiente">▶</button>
     </div>
   </div>
-  <div class="tenue">${h(fmtLargo(f))}${f === hoy() ? ' (hoy)' : ''}${clase ? '' : ` · <b>${motivo ? h(motivo) : 'No es día de clase de este grupo'}</b>; puedes registrar igualmente.`}</div>
+  <div class="tenue">${h(fmtLargo(f))}${f === hoy() ? ' (hoy)' : ''}${clase ? '' : ` · <b>${motivo ? h(motivo) : `No hay ${h(nm)} con este grupo este día`}</b>; puedes registrar igualmente.`}</div>
   <div class="contadores" id="contadores"></div>
-  ${avisoBloqueo(gid, f)}
+  ${avisoBloqueo(gid, f, m)}
   <div class="herr">
     <input type="search" id="buscar" placeholder="Buscar alumno…" value="${h(S.busqueda)}" aria-label="Buscar por nombre">
     <button class="btn" data-acc="orden">${modo === 'az' ? 'Orden: A–Z' : 'Orden: reporte'}</button>
-    <button class="btn todos" data-acc="todos"${listaBloqueada(gid, f) ? ' disabled' : ''}>Marcar asistencia a todos los pendientes</button>
+    <button class="btn todos" data-acc="todos"${bloq ? ' disabled' : ''}>Marcar asistencia a todos los pendientes</button>
   </div>
   <ul class="alumnos" id="alumnos"></ul>
   <p class="tenue">${inactivos ? `${inactivos} alumno(s) con «Ya no viene» no aparecen en esta fecha. ` : ''}<a href="#/grupo/${encodeURIComponent(gid)}">Ver alumnos inactivos y administrar grupo</a></p>`;
-  S.estadoBloqueo = gid + '|' + f + '|' + listaBloqueada(gid, f) + '|' + bloqueoNatural(f);
+  S.estadoBloqueo = gid + '|' + f + '|' + m + '|' + bloq + '|' + bloqueoNatural(f, escDe(gid));
   pintarAlumnos(gid);
   $('#fecha').onchange = e => { if (e.target.value) { S.fechaLista = e.target.value; S.deshacer = null; render(); } };
   $('#buscar').oninput = e => { S.busqueda = e.target.value; pintarAlumnos(gid); };
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
     const acc = b.dataset.acc;
-    if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaLista = diaDeClaseVecino(gid, S.fechaLista, acc === 'dia-sig' ? 1 : -1); render(); }
+    if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaLista = diaDeClaseVecino(gid, S.fechaLista, acc === 'dia-sig' ? 1 : -1, m); render(); }
     else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
     else if (acc === 'todos') marcarTodos(gid);
     else if (acc === 'desbloquear') {
-      if (!await confirmar('Corregir asistencia', `¿Seguro que quieres corregir la lista de ${g.nombre} del ${fmtF(S.fechaLista)}? Quedará abierta ${MIN_DESBLOQUEO} minutos y cada cambio quedará anotado.`, 'Sí, corregir', false)) return;
-      S.desbloqueos[gid + '|' + S.fechaLista] = Date.now() + MIN_DESBLOQUEO * 60000; render();
-    } else if (acc === 'bloquear') { delete S.desbloqueos[gid + '|' + S.fechaLista]; render(); }
+      if (!await confirmar('Corregir asistencia', `¿Seguro que quieres corregir la lista de ${g.nombre} (${nm}) del ${fmtF(S.fechaLista)}? Quedará abierta ${MIN_DESBLOQUEO} minutos y cada cambio quedará anotado.`, 'Sí, corregir', false)) return;
+      S.desbloqueos[gid + '|' + S.fechaLista + '|' + m] = Date.now() + MIN_DESBLOQUEO * 60000; render();
+    } else if (acc === 'bloquear') { delete S.desbloqueos[gid + '|' + S.fechaLista + '|' + m]; render(); }
     else if (acc === 'A' || acc === 'F') marcar(gid, b.dataset.s, acc);
     else if (acc === 'B') darDeBaja(b.dataset.s);
   };
 }
-function diaDeClaseVecino(gid, f, dir) {
-  const g = grupo(gid); const sc = sinClaseSet();
-  if (!g || !(g.dias || []).length) return sumarDias(f, dir);
+function diaDeClaseVecino(gid, f, dir, m = S.mat || 'TEC') {
+  const sc = sinClaseSet();
+  if (!grupo(gid) || !diasDe(gid, m).length) return sumarDias(f, dir);
   let x = f;
-  for (let i = 0; i < 60; i++) { x = sumarDias(x, dir); if (esDiaDeClase(gid, x, sc)) return x; }
+  for (let i = 0; i < 60; i++) { x = sumarDias(x, dir); if (esDiaDeClase(gid, x, sc, m)) return x; }
   return sumarDias(f, dir);
 }
 function alumnosDeLista(gid, f) {
@@ -351,27 +393,28 @@ function alumnosDeLista(gid, f) {
 }
 /* ---- Bloqueo de la lista al terminar la jornada ---- */
 const MIN_DESBLOQUEO = 10;
-function finJornada() { const ms = (horario().modulos || []).filter(x => x.fin); return ms.length ? ms[ms.length - 1].fin : '13:40'; }
-function bloqueoNatural(f) {
+function finJornada(esc = '202') { const ms = (horarioEsc(esc).modulos || []).filter(x => x.fin); return ms.length ? ms[ms.length - 1].fin : '13:40'; }
+function bloqueoNatural(f, esc = '202') {
   const h0 = hoy(); if (f < h0) return true; if (f > h0) return false;
-  const n = new Date(); return n.getHours() * 60 + n.getMinutes() >= aMin(finJornada());
+  const n = new Date(); return n.getHours() * 60 + n.getMinutes() >= aMin(finJornada(esc));
 }
-function desbloqueada(g, f) { const t = S.desbloqueos[g + '|' + f]; return !!t && t > Date.now(); }
-function listaBloqueada(g, f) { return bloqueoNatural(f) && !desbloqueada(g, f); }
-function avisoBloqueo(gid, f) {
-  if (!bloqueoNatural(f)) return '';
-  if (desbloqueada(gid, f)) {
-    const t = new Date(S.desbloqueos[gid + '|' + f]), hasta = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+function desbloqueada(g, f, m = 'TEC') { const t = S.desbloqueos[g + '|' + f + '|' + m]; return !!t && t > Date.now(); }
+function listaBloqueada(g, f, m = 'TEC') { return bloqueoNatural(f, escDe(g)) && !desbloqueada(g, f, m); }
+function avisoBloqueo(gid, f, m = 'TEC') {
+  const esc = escDe(gid);
+  if (!bloqueoNatural(f, esc)) return '';
+  if (desbloqueada(gid, f, m)) {
+    const t = new Date(S.desbloqueos[gid + '|' + f + '|' + m]), hasta = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
     return `<div class="bloqueo abierto"><span>🔓 Corrección permitida hasta las <b>${hasta}</b>. Los cambios quedan anotados.</span><button class="btn small" data-acc="bloquear">🔒 Bloquear ya</button></div>`;
   }
-  const motivo = f < hoy() ? 'Lista de un día pasado' : `La jornada terminó a las ${finJornada()}`;
+  const motivo = f < hoy() ? 'Lista de un día pasado' : `La jornada terminó a las ${finJornada(esc)}`;
   return `<div class="bloqueo"><span>🔒 <b>${motivo}:</b> la asistencia está bloqueada.</span><button class="btn small primary" data-acc="desbloquear">🔓 Desbloquear para corregir</button></div>`;
 }
-function correccion(s, f, de, a) { return { t: 'h', id: 'h' + Date.now().toString(36) + aleatorio(5), d: { g: s.g, s: s.id, f, de, a, cuando: new Date().toISOString() } }; }
-function filaAlumno(s, i, f) {
-  const e = estado(s.id, f);
+function correccion(s, f, de, a, m = 'TEC') { const d = { g: s.g, s: s.id, f, de, a, cuando: new Date().toISOString() }; if (m !== 'TEC') d.m = m; return { t: 'h', id: 'h' + Date.now().toString(36) + aleatorio(5), d }; }
+function filaAlumno(s, i, f, m = S.mat || 'TEC') {
+  const e = estado(s.id, f, m);
   const cls = e || 'N';
-  const dis = listaBloqueada(s.g, f) ? ' disabled' : '';
+  const dis = listaBloqueada(s.g, f, m) ? ' disabled' : '';
   return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
     <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${cls}">${e === 'A' ? '✓ ' : e === 'F' ? '✗ ' : ''}${ESTADO_TXT[e]}</span></div>
     <div class="botones">
@@ -389,37 +432,37 @@ function pintarAlumnos(gid) {
   pintarContadores(gid);
 }
 function pintarContadores(gid) {
-  const f = S.fechaLista, lista = alumnosDeLista(gid, f);
-  let a = 0, fa = 0; lista.forEach(s => { const e = estado(s.id, f); if (e === 'A') a++; else if (e === 'F') fa++; });
+  const f = S.fechaLista, m = S.mat || 'TEC', lista = alumnosDeLista(gid, f);
+  let a = 0, fa = 0; lista.forEach(s => { const e = estado(s.id, f, m); if (e === 'A') a++; else if (e === 'F') fa++; });
   const c = $('#contadores'); if (!c) return;
   c.innerHTML = `<div class="contador a"><b>${a}</b>Asistencias</div><div class="contador f"><b>${fa}</b>Faltas</div><div class="contador p"><b>${lista.length - a - fa}</b>Sin registrar</div>`;
 }
 async function marcar(gid, sid, e) {
   const s = alumno(sid); if (!s) return;
-  const f = S.fechaLista;
-  if (listaBloqueada(gid, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); render(); return; }
-  const actual = estado(sid, f);
+  const f = S.fechaLista, m = S.mat || 'TEC';
+  if (listaBloqueada(gid, f, m)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); render(); return; }
+  const actual = estado(sid, f, m);
   const nuevo = actual === e ? '' : e;   // tocar de nuevo el mismo botón lo regresa a «Sin registrar»
-  const cambios = [cambiarEstado(s, f, nuevo)];
-  if (bloqueoNatural(f)) cambios.push(correccion(s, f, actual, nuevo));
+  const cambios = [cambiarEstado(s, f, nuevo, m)];
+  if (bloqueoNatural(f, escDe(gid))) cambios.push(correccion(s, f, actual, nuevo, m));
   await guardar(cambios);
   const li = document.getElementById('al-' + sid);
-  if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaAlumno(s, n, f); }
+  if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaAlumno(s, n, f, m); }
   pintarContadores(gid);
 }
 async function marcarTodos(gid) {
-  const f = S.fechaLista;
-  const pend = alumnosDeLista(gid, f).filter(s => !estado(s.id, f));
-  if (listaBloqueada(gid, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
+  const f = S.fechaLista, m = S.mat || 'TEC';
+  const pend = alumnosDeLista(gid, f).filter(s => !estado(s.id, f, m));
+  if (listaBloqueada(gid, f, m)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
   if (!pend.length) { toast('No hay alumnos pendientes.'); return; }
-  const corr = bloqueoNatural(f);
-  await guardar(pend.flatMap(s => corr ? [cambiarEstado(s, f, 'A'), correccion(s, f, '', 'A')] : [cambiarEstado(s, f, 'A')]));
+  const corr = bloqueoNatural(f, escDe(gid));
+  await guardar(pend.flatMap(s => corr ? [cambiarEstado(s, f, 'A', m), correccion(s, f, '', 'A', m)] : [cambiarEstado(s, f, 'A', m)]));
   const ids = pend.map(s => s.id);
   pintarAlumnos(gid);
   toast(`Se marcó asistencia a ${ids.length} alumno(s).`, {
     accion: 'Deshacer', ms: 10000, alPulsar: async () => {
-      if (listaBloqueada(gid, f)) { toast('La lista ya se bloqueó; desbloquéala para deshacer.'); return; }
-      const cambios = ids.map(id => alumno(id)).filter(s => s && estado(s.id, f) === 'A').flatMap(s => corr ? [cambiarEstado(s, f, ''), correccion(s, f, 'A', '')] : [cambiarEstado(s, f, '')]);
+      if (listaBloqueada(gid, f, m)) { toast('La lista ya se bloqueó; desbloquéala para deshacer.'); return; }
+      const cambios = ids.map(id => alumno(id)).filter(s => s && estado(s.id, f, m) === 'A').flatMap(s => corr ? [cambiarEstado(s, f, '', m), correccion(s, f, 'A', '', m)] : [cambiarEstado(s, f, '', m)]);
       await guardar(cambios); render(); toast('Se deshizo «Marcar asistencia a todos».');
     }
   });
@@ -427,12 +470,12 @@ async function marcarTodos(gid) {
 async function darDeBaja(sid) {
   const s = alumno(sid); if (!s) return;
   const f = S.fechaLista;
-  if (listaBloqueada(s.g, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
+  if (listaBloqueada(s.g, f, S.mat || 'TEC')) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
   const r = await dialogo({
     titulo: 'Ya no viene', ok: 'Confirmar baja',
     html: `<p><b>${h(nombreCompleto(s))}</b> dejará de aparecer en las listas a partir de la fecha indicada.</p>
       <label class="campo"><span>No aparece a partir de:</span><input type="date" name="desde" value="${f}" required></label>
-      <p class="tenue">Su historial anterior se conserva. Los días posteriores no se cuentan como faltas. Podrás reactivarlo desde la administración del grupo.</p>`
+      <p class="tenue">Aplica a todas sus materias. Su historial anterior se conserva. Los días posteriores no se cuentan como faltas. Podrás reactivarlo desde la administración del grupo.</p>`
   });
   if (!r) return;
   const desde = r.querySelector('[name=desde]').value || f;
@@ -447,7 +490,7 @@ async function darDeBaja(sid) {
 function vistaGrupo(v, gid) {
   const g = grupo(gid);
   if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
-  $('#titulo').textContent = 'Grupo ' + g.nombre;
+  $('#titulo').textContent = 'Grupo ' + nombreGrupoL(gid);
   const todos = ordenar(alumnosDe(gid), S.meta.orden || 'reporte');
   const act = todos.filter(s => !bajaVigente(s)), inact = todos.filter(s => bajaVigente(s));
   v.innerHTML = `
@@ -456,9 +499,9 @@ function vistaGrupo(v, gid) {
     ${inact.length ? `<ul class="lista-simple">${inact.map(s => `<li><span><b>${h(nombreCompleto(s))}</b><br><span class="tenue">No viene desde ${fmtF(bajaVigente(s).desde)}</span></span>
       <button class="btn small" data-acc="reactivar" data-s="${h(s.id)}">Reactivar</button></li>`).join('')}</ul>` : '<p class="tenue">No hay alumnos inactivos.</p>'}
   </div>
-  <div class="card"><h2>Días de clase de ${h(g.nombre)}</h2>
-    <div class="dias">${[1, 2, 3, 4, 5, 6].map(d => `<label><input type="checkbox" name="dia" value="${d}" ${(g.dias || []).includes(d) ? 'checked' : ''}>${DIAS[d].slice(0, 3)}</label>`).join('')}</div>
-    <p class="tenue">Solo estos días (sin contar los días sin clase del calendario) aparecen como columnas en el concentrado.</p>
+  <div class="card"><h2>Materias y días de clase de ${h(g.nombre)}</h2>
+    <ul class="lista-simple">${materiasDe(gid).map(m => `<li><span><b>${h(nombreMateria(m, gid))}</b></span><span>${diasDe(gid, m).map(d => DIAS[d]).join(', ') || 'sin días'}</span></li>`).join('') || '<li class="tenue">Este grupo no tiene clases en tu horario.</li>'}</ul>
+    <p class="tenue">Salen de tu horario (${h(escuela(escDe(gid)).corto)}). Para cambiarlos usa la pestaña <a href="#/horario">Horario → Modificar horario</a>. Solo esos días, sin contar los días sin clase del calendario, aparecen como columnas en el concentrado.</p>
   </div>
   <div class="card"><h2>Alumnos activos (${act.length})</h2>
     <ul class="lista-simple">${act.map(s => `<li><span>${h(nombreCompleto(s))}<br><span class="tenue">ID: ${h(s.id)}</span></span>
@@ -470,20 +513,16 @@ function vistaGrupo(v, gid) {
   <div class="card"><h2>Correcciones con permiso (${vivos('h').filter(x => x.d.g === gid).length})</h2>
     ${(() => { const hs = vivos('h').map(x => x.d).filter(x => x.g === gid).sort((a, b) => b.cuando.localeCompare(a.cuando));
       if (!hs.length) return '<p class="tenue">No se han corregido listas después de cerrarse.</p>';
-      return `<details><summary>Ver las últimas ${Math.min(hs.length, 100)}</summary><div class="scroll"><table class="t"><thead><tr><th>Clase del</th><th>Alumno</th><th>Cambio</th><th>Corregido el</th></tr></thead><tbody>${hs.slice(0, 100).map(x => { const al = alumno(x.s); return `<tr><td>${fmtF(x.f)}</td><td>${h(al ? nombreCompleto(al) : x.s)}</td><td>${ESTADO_TXT[x.de || '']} → <b>${ESTADO_TXT[x.a || '']}</b></td><td>${h(fmtHora(new Date(x.cuando)))}</td></tr>`; }).join('')}</tbody></table></div></details>
+      return `<details><summary>Ver las últimas ${Math.min(hs.length, 100)}</summary><div class="scroll"><table class="t"><thead><tr><th>Clase del</th><th>Materia</th><th>Alumno</th><th>Cambio</th><th>Corregido el</th></tr></thead><tbody>${hs.slice(0, 100).map(x => { const al = alumno(x.s); return `<tr><td>${fmtF(x.f)}</td><td>${h(nombreMateria(matDe(x), gid))}</td><td>${h(al ? nombreCompleto(al) : x.s)}</td><td>${ESTADO_TXT[x.de || '']} → <b>${ESTADO_TXT[x.a || '']}</b></td><td>${h(fmtHora(new Date(x.cuando)))}</td></tr>`; }).join('')}</tbody></table></div></details>
         <button class="btn small" data-acc="csv-corr" style="margin-top:.5rem">Descargar correcciones (CSV)</button>`; })()}
   </div>
   <div class="card"><h2>Borrar registros de un día</h2>
-    <div class="fila"><input type="date" id="dia-borrar" value="${S.fechaLista}" style="width:auto"><button class="btn danger" data-acc="borrar-dia">Borrar la lista de ese día</button></div>
+    <div class="fila"><input type="date" id="dia-borrar" value="${S.fechaLista}" style="width:auto">${materiasDe(gid).length > 1 ? `<select id="mat-borrar" style="width:auto">${materiasDe(gid).map(m => `<option value="${m}">${h(nombreMateria(m, gid))}</option>`).join('')}</select>` : ''}<button class="btn danger" data-acc="borrar-dia">Borrar la lista de ese día</button></div>
   </div>
   <div class="card"><h2>Eliminar grupo</h2>
     <p class="tenue">Borra el grupo, sus alumnos y todas sus asistencias. Crea un respaldo antes.</p>
     <button class="btn danger" data-acc="borrar-grupo">Eliminar ${h(g.nombre)}</button>
   </div>`;
-  $$('input[name=dia]', v).forEach(c => c.onchange = async () => {
-    const dias = $$('input[name=dia]:checked', v).map(x => Number(x.value));
-    await guardar([{ t: 'g', id: gid, d: { ...grupo(gid), dias } }]); toast('Días de clase guardados.');
-  });
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
     const acc = b.dataset.acc, s = b.dataset.s ? alumno(b.dataset.s) : null;
@@ -506,14 +545,15 @@ function vistaGrupo(v, gid) {
       await guardar([{ t: 's', id, d: { id, g: gid, ap: '', am: '', n: '', nc: normNombre(nom), o: maxo + 1, bajas: [] } }]);
       toast('Alumno agregado.'); render();
     } else if (acc === 'csv-corr') {
-      const filas = [['Grupo', 'Fecha de la clase', 'ID alumno', 'Alumno', 'Antes', 'Después', 'Corregido el']];
-      vivos('h').map(x => x.d).filter(x => x.g === gid).sort((a, b) => a.cuando.localeCompare(b.cuando)).forEach(x => { const al = alumno(x.s); filas.push([g.nombre, x.f, x.s, al ? nombreCompleto(al) : '', ESTADO_TXT[x.de || ''], ESTADO_TXT[x.a || ''], fmtHora(new Date(x.cuando))]); });
+      const filas = [['Grupo', 'Materia', 'Fecha de la clase', 'ID alumno', 'Alumno', 'Antes', 'Después', 'Corregido el']];
+      vivos('h').map(x => x.d).filter(x => x.g === gid).sort((a, b) => a.cuando.localeCompare(b.cuando)).forEach(x => { const al = alumno(x.s); filas.push([nombreGrupoL(gid), nombreMateria(matDe(x), gid), x.f, x.s, al ? nombreCompleto(al) : '', ESTADO_TXT[x.de || ''], ESTADO_TXT[x.a || ''], fmtHora(new Date(x.cuando))]); });
       descargar(`correcciones_${gid}_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
     } else if (acc === 'borrar-dia') {
       const f = $('#dia-borrar').value; if (!f) return;
-      const regs = vivos('r').filter(r => r.d.g === gid && r.d.f === f && r.d.e);
+      const mb = $('#mat-borrar') ? $('#mat-borrar').value : (materiasDe(gid)[0] || 'TEC');
+      const regs = vivos('r').filter(r => r.d.g === gid && r.d.f === f && r.d.e && matDe(r.d) === mb);
       if (!regs.length) { toast('No hay registros ese día.'); return; }
-      if (!await confirmar('Borrar registros', `Se borrarán ${regs.length} registro(s) de ${g.nombre} del ${fmtF(f)}. Los alumnos quedarán «Sin registrar». ¿Continuar?`, 'Borrar')) return;
+      if (!await confirmar('Borrar registros', `Se borrarán ${regs.length} registro(s) de ${g.nombre} (${nombreMateria(mb, gid)}) del ${fmtF(f)}. Los alumnos quedarán «Sin registrar». ¿Continuar?`, 'Borrar')) return;
       await guardar(regs.map(r => ({ t: 'r', id: r.id, d: { ...r.d, e: '' } }))); toast('Registros borrados.');
     } else if (acc === 'borrar-grupo') {
       if (!await confirmar('Eliminar grupo', `Se eliminará ${g.nombre}, sus ${alumnosDe(gid).length} alumnos y todos sus registros. Esta acción no se puede deshacer salvo con un respaldo. ¿Eliminar?`, 'Eliminar grupo')) return;
@@ -609,19 +649,22 @@ function leerCSV(txt, nombre) {
 
 /* ---------------- Importación ---------------- */
 const CAMPOS = [
+  ['np', 'Número de lista (opcional; ignora renglones sin número, como firmas)', ['np', 'nl', 'nolista', 'numerodelista', 'nodelista', 'num', 'no']],
   ['id', 'Identificador del alumno (opcional)', ['id', 'idalumno', 'matricula', 'clave', 'folio', 'numerodecontrol', 'nocontrol', 'numcontrol']],
   ['ap', 'Apellido paterno', ['apellidopaterno', 'primerapellido', 'paterno']],
   ['am', 'Apellido materno', ['apellidomaterno', 'segundoapellido', 'materno']],
   ['n', 'Nombre(s)', ['nombres', 'nombre']],
-  ['nc', 'Nombre completo (si viene en una sola columna)', ['nombrecompleto', 'alumno', 'nombredelalumno', 'nombrealumno', 'alumnoa']],
+  ['nc', 'Nombre completo (si viene en una sola columna)', ['nombrecompleto', 'alumno', 'nombredelalumno', 'nombrealumno', 'alumnoa', 'apellidopaternomaternonombres', 'apellidopaternomaternonombre', 'apellidopaternomaternoynombres', 'apellidosynombres', 'apellidosynombre', 'nombredelalumnoa', 'nombrecompletodelalumno']],
   ['grado', 'Grado', ['grado']],
   ['grupo', 'Grupo', ['grupo']],
 ];
 function detectarEncabezado(filas) {
-  const claves = new Set(CAMPOS.flatMap(c => c[2]));
+  // Busca el renglón de encabezados; las columnas de nombre pesan más que las demás.
+  const peso = new Map();
+  CAMPOS.forEach(([c, , cands]) => cands.forEach(x => { if (!peso.has(x)) peso.set(x, ['ap', 'am', 'n', 'nc'].includes(c) ? 3 : 1); }));
   let mejor = 0, pts = -1;
-  for (let i = 0; i < Math.min(15, filas.length); i++) {
-    const p = (filas[i] || []).filter(x => claves.has(norm(x))).length;
+  for (let i = 0; i < Math.min(40, filas.length); i++) {
+    const p = (filas[i] || []).reduce((t, x) => t + (peso.get(norm(x)) || 0), 0);
     if (p > pts) { pts = p; mejor = i; }
   }
   return mejor;
@@ -631,10 +674,17 @@ function mapeoAutomatico(enc) {
   CAMPOS.forEach(([campo, , cands]) => {
     for (const cand of cands) { const i = enc.findIndex(x => norm(x) === cand); if (i >= 0) { m[campo] = i; break; } }
   });
+  if (m.nc == null && m.n == null && m.ap == null) { const i = enc.findIndex(x => norm(x).includes('nombre') || norm(x).includes('alumno')); if (i >= 0) m.nc = i; }
   if (m.nc != null && m.n != null && m.ap != null) delete m.nc;
   m.fuenteGrupo = (m.grado != null || m.grupo != null) ? 'cols' : 'hoja';
   return m;
 }
+function escuelaDelArchivo(hojas) {
+  const txt = hojas.slice(0, 3).map(hj => hj.filas.slice(0, 15).map(f => (f || []).join(' ')).join(' ')).join(' ').toUpperCase();
+  const e = escuelas().find(x => new RegExp('(NO\\.?|N°|NÚM\\.?|NUM\\.?)\\s*' + x.id + '\\b').test(txt) || (x.cct && txt.includes(x.cct)));
+  return e ? e.id : '202';
+}
+function hojaEsDeGrupo(nombre) { return /\d/.test(nombre) && /^[^A-Za-zÁÉÍÓÚÑáéíóúñ]*\d+\D{0,4}[A-Za-zÑñ]\s*$/.test(String(nombre).trim()); }
 function grupoDesde(texto) {
   const t = String(texto || '').toUpperCase();
   const num = (t.match(/\d+/) || [''])[0];
@@ -644,7 +694,7 @@ function grupoDesde(texto) {
   const limpio = String(texto || '').replace(/[^\p{L}\p{N} °-]/gu, ' ').replace(/\s+/g, ' ').trim();
   return limpio ? { id: norm(limpio).toUpperCase() || limpio, nombre: limpio } : null;
 }
-function prepararImportacion(hojas, m, incluirDupsExistentes) {
+function prepararImportacion(hojas, m, incluirDupsExistentes, esc = '202') {
   const filas = [], errores = [];
   const vistos = new Map();
   hojas.forEach(hoja => {
@@ -654,11 +704,14 @@ function prepararImportacion(hojas, m, incluirDupsExistentes) {
       const val = k => m[k] != null && m[k] !== '' ? String(f[m[k]] || '').trim() : '';
       let ap = val('ap'), am = val('am'), n = val('n'), nc = val('nc');
       if (!ap && !am && !n && !nc) return;
+      if (m.np != null && m.np !== '' && !/^\d+$/.test(val('np'))) return;   // renglones sin número de lista (firmas, notas)
       let g;
       if (m.fuenteGrupo === 'hoja') g = grupoDesde(hoja.nombre);
       else if (m.grado != null && m.grupo != null) g = grupoDesde(val('grado') + ' ' + val('grupo'));
       else g = grupoDesde(val('grupo') || val('grado'));
       if (!g) { errores.push(`Hoja «${hoja.nombre}», fila ${ie + idx + 2}: no se pudo determinar el grupo.`); return; }
+      if (esc !== '202') g = { ...g, id: esc + '-' + g.id };
+      g.esc = esc;
       const nombre = normNombre([ap, am, n].filter(Boolean).join(' ') || nc);
       const id = val('id').replace(/\s+/g, '') || null;
       filas.push({ hoja: hoja.nombre, filaNum: ie + idx + 2, orden: idx + 1, g, ap: normNombre(ap), am: normNombre(am), n: normNombre(n), nc: (ap || am || n) ? '' : normNombre(nc), nombre, id });
@@ -695,7 +748,7 @@ async function aplicarImportacion(prep) {
   let orden = grupos().length;
   const ordenados = [...gruposArchivo.values()].sort((a, b) => String(a.id).localeCompare(String(b.id), 'es', { numeric: true }));
   ordenados.forEach(g => {
-    if (!grupo(g.id)) cambios.push({ t: 'g', id: g.id, d: { id: g.id, nombre: g.nombre, orden: ++orden, dias: DIAS_PRECARGADOS[g.id] ? DIAS_PRECARGADOS[g.id].slice() : [] } });
+    if (!grupo(g.id)) { const d = { id: g.id, nombre: g.nombre, orden: ++orden, dias: g.esc === '202' && DIAS_PRECARGADOS[g.id] ? DIAS_PRECARGADOS[g.id].slice() : [] }; if (g.esc && g.esc !== '202') d.esc = g.esc; cambios.push({ t: 'g', id: g.id, d }); }
   });
   prep.filas.forEach(r => {
     if (r.accion === 'omitir') return;
@@ -723,26 +776,34 @@ function vistaImportar(v) {
         const utiles = hojas.filter(hj => hj.filas.some(f => f && f.some(x => x)));
         if (!utiles.length) throw new Error('El archivo no tiene datos.');
         utiles.forEach(hj => { hj.enc = detectarEncabezado(hj.filas); });
-        const enc = utiles[0].filas[utiles[0].enc] || [];
-        S.importacion = { archivo: file.name, hojas: utiles, enc, m: mapeoAutomatico(enc), incluirDups: false };
+        const deGrupo = utiles.filter(hj => hojaEsDeGrupo(hj.nombre));
+        const sel = new Set((deGrupo.length ? deGrupo : utiles).map(hj => hj.nombre));
+        const base = utiles.find(hj => sel.has(hj.nombre)) || utiles[0];
+        const enc = base.filas[base.enc] || [];
+        S.importacion = { archivo: file.name, todas: utiles, sel, enc, m: mapeoAutomatico(enc), incluirDups: false, esc: escuelaDelArchivo(utiles) };
         render();
       } catch (err) { console.error(err); toast('No se pudo leer el archivo: ' + err.message, { ms: 8000 }); }
     };
     return;
   }
-  const { hojas, enc, m } = st;
+  const { enc, m } = st;
+  const hojas = st.todas.filter(hj => st.sel.has(hj.nombre));
   const difieren = hojas.filter(hj => (hj.filas[hj.enc] || []).map(norm).join('|') !== enc.map(norm).join('|'));
   const opciones = sel => `<option value="">— ninguna —</option>` + enc.map((x, i) => `<option value="${i}" ${sel === i ? 'selected' : ''}>${h(x || ('Columna ' + (i + 1)))}</option>`).join('');
   const faltaNombre = m.nc == null && m.n == null && m.ap == null;
-  const prep = faltaNombre ? { filas: [], errores: [] } : prepararImportacion(hojas, m, st.incluirDups);
+  const prep = faltaNombre || !hojas.length ? { filas: [], errores: [] } : prepararImportacion(hojas, m, st.incluirDups, st.esc);
   st.prep = prep;
   const porGrupo = new Map();
   prep.filas.forEach(r => { if (!porGrupo.has(r.g.id)) porGrupo.set(r.g.id, { g: r.g, filas: [] }); porGrupo.get(r.g.id).filas.push(r); });
   const cuenta = (l, a) => l.filter(r => r.accion === a).length;
   const avisos = prep.filas.filter(r => r.aviso || r.accion === 'omitir');
   v.innerHTML = `
-  <div class="card"><h2>1. Columnas del archivo</h2>
-    <p class="tenue">Archivo: <b>${h(st.archivo)}</b> · ${hojas.length} hoja(s): ${hojas.map(x => h(x.nombre.replace(/[^\p{L}\p{N} ]/gu, '°'))).join(', ')}</p>
+  <div class="card"><h2>1. Escuela y hojas</h2>
+    <p class="tenue">Archivo: <b>${h(st.archivo)}</b></p>
+    <label class="campo"><span>¿De qué escuela son estos alumnos?</span><select id="imp-esc">${escuelas().map(e => `<option value="${h(e.id)}" ${st.esc === e.id ? 'selected' : ''}>${h(e.nombre)}</option>`).join('')}</select></label>
+    ${st.todas.length > 1 ? `<p style="margin:.4rem 0 .2rem">Hojas a importar:</p><div class="fila">${st.todas.map((x, i) => `<label class="chk"><input type="checkbox" data-hoja="${i}" ${st.sel.has(x.nombre) ? 'checked' : ''}> ${h(x.nombre.replace(/[^\p{L}\p{N} ]/gu, '°'))}</label>`).join('')}</div>` : ''}
+  </div>
+  <div class="card"><h2>2. Columnas del archivo</h2>
     ${difieren.length ? `<div class="aviso">Algunas hojas tienen encabezados distintos a la primera: ${difieren.map(x => h(x.nombre)).join(', ')}. Revisa la vista previa.</div>` : ''}
     ${CAMPOS.filter(c => c[0] !== 'grado' && c[0] !== 'grupo').map(([c, et]) => `<label class="campo"><span>${h(et)}</span><select data-campo="${c}">${opciones(m[c])}</select></label>`).join('')}
     <label class="campo"><span>¿De dónde sale el grupo?</span><select data-campo="fuenteGrupo">
@@ -750,11 +811,11 @@ function vistaImportar(v) {
       <option value="hoja" ${m.fuenteGrupo === 'hoja' ? 'selected' : ''}>Del nombre de cada hoja</option></select></label>
     ${m.fuenteGrupo === 'cols' ? CAMPOS.filter(c => c[0] === 'grado' || c[0] === 'grupo').map(([c, et]) => `<label class="campo"><span>${h(et)}</span><select data-campo="${c}">${opciones(m[c])}</select></label>`).join('') : ''}
   </div>
-  <div class="card"><h2>2. Vista previa</h2>
+  <div class="card"><h2>3. Vista previa</h2>
     ${faltaNombre ? '<div class="error">Selecciona al menos la columna del nombre.</div>' : ''}
     ${prep.errores.length ? `<div class="error">${prep.errores.slice(0, 10).map(h).join('<br>')}${prep.errores.length > 10 ? `<br>…y ${prep.errores.length - 10} más` : ''}</div>` : ''}
     <div class="scroll"><table class="t"><thead><tr><th>Grupo</th><th>Alumnos</th><th>Nuevos</th><th>Ya existentes</th><th>Omitidos</th></tr></thead><tbody>
-    ${[...porGrupo.values()].map(x => `<tr><td><b>${h(x.g.nombre)}</b>${grupo(x.g.id) ? '' : ' <span class="tenue">(grupo nuevo)</span>'}</td><td>${x.filas.length}</td><td>${cuenta(x.filas, 'nuevo')}</td><td>${cuenta(x.filas, 'actualizar')}</td><td>${cuenta(x.filas, 'omitir')}</td></tr>`).join('')}
+    ${[...porGrupo.values()].map(x => `<tr><td><b>${h(x.g.nombre)}</b> <span class="tenue">${h(escuela(x.g.esc || '202').corto)}</span>${grupo(x.g.id) ? '' : ' <span class="tenue">(grupo nuevo)</span>'}</td><td>${x.filas.length}</td><td>${cuenta(x.filas, 'nuevo')}</td><td>${cuenta(x.filas, 'actualizar')}</td><td>${cuenta(x.filas, 'omitir')}</td></tr>`).join('')}
     </tbody></table></div>
     ${avisos.length ? `<div class="aviso"><b>Posibles duplicados u omisiones (${avisos.length}):</b><br>${avisos.slice(0, 30).map(r => `${h(r.g.nombre)} · ${h(r.nombre)}: ${h(r.nota && r.accion === 'omitir' ? r.nota : r.aviso)}`).join('<br>')}</div>
       <label class="fila"><input type="checkbox" id="incluir-dups" ${st.incluirDups ? 'checked' : ''}> Importar también los que coinciden por nombre con alumnos ya registrados</label>` : ''}
@@ -767,6 +828,8 @@ function vistaImportar(v) {
     render();
   });
   const cb = $('#incluir-dups'); if (cb) cb.onchange = () => { st.incluirDups = cb.checked; render(); };
+  $('#imp-esc').onchange = e => { st.esc = e.target.value; render(); };
+  $$('[data-hoja]', v).forEach(c => c.onchange = () => { const n = st.todas[Number(c.dataset.hoja)].nombre; if (c.checked) st.sel.add(n); else st.sel.delete(n); render(); });
   $('#cancelar-imp').onclick = () => { S.importacion = null; render(); };
   $('#confirmar-imp').onclick = async () => {
     const n = prep.filas.filter(r => r.accion !== 'omitir').length;
@@ -781,8 +844,8 @@ function vistaImportar(v) {
 const TRAB_TXT = { T: 'Terminó', A: 'Avance', N: 'No hizo nada', '': 'Sin registrar' };
 const TRAB_MARCA = { T: 'T', A: 'AV', N: 'N' };
 function actividad(id) { const it = S.items.get('a:' + id); return it && !it.del ? it.d : null; }
-function actividadesDe(g) {
-  return vivos('a').map(i => i.d).filter(a => a.g === g)
+function actividadesDe(g, m = null) {
+  return vivos('a').map(i => i.d).filter(a => a.g === g && (!m || matDe(a) === m))
     .sort((x, y) => (y.entrega || '').localeCompare(x.entrega || '') || (y.creada || '').localeCompare(x.creada || ''));
 }
 function trabajo(aid, sid) { const it = S.items.get('w:' + aid + '|' + sid); return it && !it.del ? it.d : null; }
@@ -802,17 +865,20 @@ function tabsGrupo(gid, activo) {
   return `<div class="tabs" role="tablist"><a role="tab" href="#/lista/${g}" class="${activo === 'l' ? 'activo' : ''}" aria-selected="${activo === 'l'}">✓ Asistencia</a><a role="tab" href="#/trabajos/${g}" class="${activo === 't' ? 'activo' : ''}" aria-selected="${activo === 't'}">📝 Trabajos</a></div>`;
 }
 async function dialogoActividad(gid, a) {
+  const mats = materiasDe(gid); const mSel = a ? matDe(a) : (mats.includes(S.mat) ? S.mat : (materiaDeHoy(gid) || mats[0] || 'TEC'));
   const r = await dialogo({
     titulo: a ? 'Editar actividad' : 'Nueva actividad', ok: a ? 'Guardar' : 'Crear',
     html: `<label class="campo"><span>Nombre de la actividad</span><input type="text" name="nombre" maxlength="120" required value="${h(a ? a.nombre : '')}" placeholder="Ej. Práctica 3 de Word"></label>
+      ${mats.length > 1 ? `<label class="campo"><span>Materia</span><select name="m">${mats.map(x => `<option value="${x}" ${x === mSel ? 'selected' : ''}>${h(nombreMateria(x, gid))}</option>`).join('')}</select></label>` : ''}
       <label class="campo"><span>Fecha de entrega</span><input type="date" name="entrega" required value="${h(a ? a.entrega : hoy())}"></label>`
   });
   if (!r) return null;
   const nombre = r.querySelector('[name=nombre]').value.trim();
   const entrega = r.querySelector('[name=entrega]').value;
+  const selM = r.querySelector('[name=m]'); const m = selM ? selM.value : (mats[0] || 'TEC');
   if (!nombre || !entrega) { toast('Escribe el nombre y la fecha de entrega.'); return null; }
   const id = a ? a.id : 'a' + aleatorio(8);
-  const d = { ...(a || {}), id, g: gid, m: a ? (a.m || 'TEC') : 'TEC', nombre, entrega, creada: a ? a.creada : hoy() };
+  const d = { ...(a || {}), id, g: gid, m, nombre, entrega, creada: a ? a.creada : hoy() };
   await guardar([{ t: 'a', id, d }]);
   return d;
 }
@@ -828,7 +894,7 @@ function vistaTrabajos(v, gid) {
     const c = contarTrab(a, alumnosDeActividad(a));
     const venc = a.entrega < f;
     return `<li><a class="act" href="#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(a.id)}">
-      <b>${h(a.nombre)}</b>
+      <b>${h(a.nombre)}${materiasDe(gid).length > 1 ? ` <span class="sub-mat mat-${matDe(a)}">${h(nombreMateria(matDe(a), gid))}</span>` : ''}</b>
       <span class="tenue">Entrega: ${h(fmtLargo(a.entrega))}${a.entrega === f ? ' (hoy)' : venc ? ' · vencida' : ''}</span>
       <span class="mini"><span class="m-T">✓ ${c.T} terminaron</span><span class="m-A">◐ ${c.A} avance</span><span class="m-N">✗ ${c.N} nada</span><span class="m-p">${c.p} sin registrar</span></span></a></li>`;
   }).join('')}</ul>` : `<div class="card"><p>Aún no hay actividades en ${h(g.nombre)}.</p><p class="tenue">Crea una con «+ Nueva actividad», ponle su fecha de entrega y marca quién terminó, quién avanzó y quién no hizo nada.</p></div>`}`;
@@ -848,7 +914,7 @@ function vistaTrabajo(v, gid, aid) {
   const venc = a.entrega < hoy();
   v.innerHTML = `${tabsGrupo(gid, 't')}
   <p style="margin:.2rem 0 .5rem"><a href="#/trabajos/${encodeURIComponent(gid)}">← Todas las actividades de ${h(g.nombre)}</a></p>
-  <div class="card"><h2 style="margin-bottom:.2rem">${h(a.nombre)}</h2>
+  <div class="card"><h2 style="margin-bottom:.2rem">${h(a.nombre)}${materiasDe(gid).length > 1 ? ` <span class="sub-mat mat-${matDe(a)}">${h(nombreMateria(matDe(a), gid))}</span>` : ''}</h2>
     <p style="margin:.2rem 0 .6rem">Entrega: <b>${h(fmtLargo(a.entrega))}</b>${venc ? ' · <b>fecha vencida</b>' : ''}</p>
     <div class="fila"><button class="btn small" data-acc="editar">Editar nombre o fecha</button><button class="btn small danger" data-acc="borrar">Eliminar actividad</button></div></div>
   <div class="contadores c4" id="contadores"></div>
@@ -902,10 +968,10 @@ async function marcarTrab(aid, sid, e) {
   if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaTrab(s, n, a); }
   pintarContTrab(a);
 }
-function datosTrabajos(gid, anio, mes) {
+function datosTrabajos(gid, anio, mes, m = 'TEC') {
   const g = grupo(gid);
   const pref = `${anio}-${String(mes + 1).padStart(2, '0')}-`;
-  const acts = actividadesDe(gid).filter(a => (a.entrega || '').startsWith(pref)).sort((x, y) => x.entrega.localeCompare(y.entrega) || x.nombre.localeCompare(y.nombre));
+  const acts = actividadesDe(gid, m).filter(a => (a.entrega || '').startsWith(pref)).sort((x, y) => x.entrega.localeCompare(y.entrega) || x.nombre.localeCompare(y.nombre));
   const ini = ymd(new Date(anio, mes, 1));
   const alumnos = ordenar(alumnosDe(gid), S.meta.orden || 'reporte').filter(s => {
     const b = bajaVigente(s);
@@ -921,15 +987,15 @@ function datosTrabajos(gid, anio, mes) {
     });
     return { s, celdas, t, baja: bajaVigente(s) };
   });
-  return { g, acts, filas, omitidos: alumnosDe(gid).length - alumnos.length, periodo: `${MESES[mes]} ${anio}` };
+  return { g, m, acts, filas, omitidos: alumnosDe(gid).length - alumnos.length, periodo: `${MESES[mes]} ${anio}` };
 }
 function htmlTrabajos(dat) {
   const c = config();
   const { g, acts, filas, periodo } = dat;
-  const n = acts.length;
+  const n = acts.length, esc = g.esc || '202', mat = nombreMateria(dat.m || 'TEC', g.id), cct = escuela(esc).cct;
   return `<section class="rep-pagina rep">
-    <div class="rep-cab"><div>${c.escuela ? `<p>${h(c.escuela)}</p>` : ''}<h3>Concentrado de trabajos · ${h(g.nombre)}</h3></div><p><b>Entregas de:</b> ${h(periodo)}</p></div>
-    <table class="rep-t"><thead><tr><th colspan="${n + 5}" class="tcab">${h(g.nombre)} · trabajos · ${h(periodo)}</th></tr>
+    <div class="rep-cab"><div><p>${h(nombreEscuelaReporte(esc))}${cct ? ' · C.C.T. ' + h(cct) : ''}</p><h3>Concentrado de trabajos · ${h(g.nombre)} · ${h(mat)}</h3></div><p><b>Entregas de:</b> ${h(periodo)}</p></div>
+    <table class="rep-t"><thead><tr><th colspan="${n + 5}" class="tcab">${h(g.nombre)} · ${h(mat)} · trabajos · ${h(periodo)}</th></tr>
       <tr><th>No.</th><th style="text-align:left">Alumno</th>${acts.map((a, i) => `<th class="dia" title="${h(a.nombre)}">${i + 1}</th>`).join('')}<th>Termin.</th><th>Avance</th><th>Nada</th></tr></thead>
     <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.baja ? `<small>Ya no viene desde ${fmtF(r.baja.desde)}</small>` : ''}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.t.T}/${n}</td><td class="tot">${r.t.A}</td><td class="tot">${r.t.N}</td></tr>`).join('') : `<tr><td colspan="${n + 5}">Sin alumnos</td></tr>`}</tbody></table>
     ${n ? `<p class="rep-ley"><b>Actividades:</b> ${acts.map((a, i) => `<b>${i + 1}</b> = ${h(a.nombre)} (entrega ${fmtF(a.entrega)})`).join(' · ')}</p>` : '<p class="rep-ley"><b>No hay actividades con fecha de entrega en este mes.</b></p>'}
@@ -954,106 +1020,127 @@ function horarioPrecargado() {
   return { modulos: mod, clases: c };
 }
 function horario() { const it = S.items.get('c:horario'); return it && !it.del ? it.d : horarioPrecargado(); }
-function nombreGrupoH(g) { const gr = grupo(g); if (gr) return gr.nombre; const x = grupoDesde(g); return x ? x.nombre : g; }
-function nombreMateria(m, g) { const gr = (String(g).match(/\d/) || [''])[0]; if (m === 'TUT') return 'Tutoría'; return (MATERIAS[m] || m) + (ROMANO[gr] ? ' ' + ROMANO[gr] : ''); }
+function horarioPrecargado184() {
+  const mod = [['1', '08:00', '08:50'], ['2', '08:50', '09:40'], ['3', '09:40', '10:30'], ['4', '10:30', '11:20'], ['R', '11:20', '11:40'], ['5', '11:40', '12:30'], ['6', '12:30', '13:20'], ['7', '13:20', '14:10']]
+    .map(([n, ini, fin]) => ({ n, ini, fin }));
+  return { modulos: mod, clases: { '2-5': { m: 'TUT', g: '184-2A' }, '2-6': { m: 'ART', g: '184-2A' }, '5-1': { m: 'ART', g: '184-2A' }, '5-3': { m: 'ART', g: '184-2A' } } };
+}
+function precargadoDe(esc) { return esc === '202' ? horarioPrecargado() : esc === '184' ? horarioPrecargado184() : { modulos: [], clases: {} }; }
+function horarioEsc(esc) {
+  if (!esc || esc === '202') return horario();
+  const it = S.items.get('c:horario-' + esc); return it && !it.del ? it.d : precargadoDe(esc);
+}
+function guardarHorario(esc, d) { return guardar([{ t: 'c', id: esc === '202' ? 'horario' : 'horario-' + esc, d }]); }
+function nombreGrupoH(g) { const gr = grupo(g); if (gr) return gr.nombre; const x = grupoDesde(String(g).split('-').pop()); return x ? x.nombre : g; }
+function nombreMateria(m, g) { const gr = (String(g).split('-').pop().match(/\d/) || [''])[0]; if (m === 'TUT') return 'Tutoría'; return (MATERIAS[m] || m) + (ROMANO[gr] ? ' ' + ROMANO[gr] : ''); }
 const aMin = t => { const [a, b] = String(t).split(':').map(Number); return a * 60 + b; };
-function tarjetaAhora(hz, ahora) {
+function sesionesDelDia(d) {   // todas las clases del día, de todas las escuelas, en orden de hora
+  const l = [];
+  escuelas().forEach(e => { const hz = horarioEsc(e.id); (hz.modulos || []).forEach(x => { const c = x.n !== 'R' && hz.clases[d + '-' + x.n]; if (c) l.push({ esc: e.id, n: x.n, ini: x.ini, fin: x.fin, c }); }); });
+  return l.sort((a, b) => aMin(a.ini) - aMin(b.ini));
+}
+function tarjetaAhora(_hz, ahora) {
   const d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
-  const clase = n => hz.clases[d + '-' + n];
-  const txt = (c, n) => `${h(nombreMateria(c.m, c.g))} · ${h(nombreGrupoH(c.g))}`;
+  const txt = o => `${h(nombreMateria(o.c.m, o.c.g))} · ${h(nombreGrupoL(o.c.g))}`;
   if (d < 1 || d > 5) return `<div class="h-et">Hoy</div><div class="h-cl">Sin clases</div><div class="h-hr">Es fin de semana.</div>`;
   const motivo = sinClaseSet().get(ymd(ahora));
   let html = motivo ? `<div class="aviso" style="margin:0 0 .5rem">Hoy: <b>${h(motivo)}</b> (según tu calendario escolar).</div>` : '';
-  const mods = hz.modulos;
-  const act = mods.find(x => m >= aMin(x.ini) && m < aMin(x.fin));
-  const cAct = act && act.n !== 'R' ? clase(act.n) : null;
-  const prox = mods.filter(x => x.n !== 'R' && aMin(x.ini) > m && clase(x.n))[0];
-  if (cAct) html += `<div class="h-et">Ahora · ${act.n}° módulo</div><div class="h-cl">${txt(cAct)}</div><div class="h-hr">${act.ini} – ${act.fin} · termina en ${aMin(act.fin) - m} min</div>`;
-  else if (act && act.n === 'R') html += `<div class="h-et">Ahora</div><div class="h-cl">Receso</div><div class="h-hr">${act.ini} – ${act.fin}</div>`;
-  else if (m < aMin(mods[0].ini)) html += `<div class="h-et">Hoy</div><div class="h-cl">Aún no empiezan las clases</div>`;
-  else if (m >= aMin(mods[mods.length - 1].fin)) html += `<div class="h-et">Hoy</div><div class="h-cl">Terminaron tus clases</div>`;
-  else html += `<div class="h-et">Ahora</div><div class="h-cl">Hora libre</div>${act ? `<div class="h-hr">${act.n}° módulo · ${act.ini} – ${act.fin}</div>` : ''}`;
-  if (prox) html += `<div class="h-sig"><b>Siguiente:</b> ${txt(clase(prox.n))} a las ${prox.ini} (${prox.n}° módulo)</div>`;
-  else if (m < aMin(mods[mods.length - 1].fin)) html += `<div class="h-sig">No tienes más clases hoy.</div>`;
-  if (cAct && cAct.m === 'TEC' && grupo(cAct.g)) html += `<a class="btn primary" style="margin-top:.6rem;display:inline-flex;align-items:center" href="#/lista/${encodeURIComponent(cAct.g)}">Pasar lista de ${h(nombreGrupoH(cAct.g))}</a>`;
+  const ses = sesionesDelDia(d);
+  if (!ses.length) return html + `<div class="h-et">Hoy</div><div class="h-cl">Sin clases</div>`;
+  const act = ses.find(o => m >= aMin(o.ini) && m < aMin(o.fin));
+  const prox = ses.find(o => aMin(o.ini) > m && o !== act);
+  if (act) html += `<div class="h-et">Ahora · ${act.n}° módulo${escuelasEnUso().length > 1 ? ' · ' + h(escuela(act.esc).corto) : ''}</div><div class="h-cl">${txt(act)}</div><div class="h-hr">${act.ini} – ${act.fin} · termina en ${aMin(act.fin) - m} min</div>`;
+  else if (m < aMin(ses[0].ini)) html += `<div class="h-et">Hoy</div><div class="h-cl">Aún no empiezan tus clases</div>`;
+  else if (m >= aMin(ses[ses.length - 1].fin)) html += `<div class="h-et">Hoy</div><div class="h-cl">Terminaron tus clases</div>`;
+  else html += `<div class="h-et">Ahora</div><div class="h-cl">Hora libre</div>`;
+  if (prox) html += `<div class="h-sig"><b>Siguiente:</b> ${txt(prox)} a las ${prox.ini}${prox.esc !== (act || {}).esc && escuelasEnUso().length > 1 ? ` <b>(en ${h(escuela(prox.esc).corto)})</b>` : ''}</div>`;
+  else if (act || m < aMin(ses[ses.length - 1].fin)) html += `<div class="h-sig">No tienes más clases hoy.</div>`;
+  if (act && grupo(act.c.g)) html += `<a class="btn primary" style="margin-top:.6rem;display:inline-flex;align-items:center" href="#/lista/${encodeURIComponent(act.c.g)}/${act.c.m}">Pasar lista de ${h(nombreGrupoH(act.c.g))} · ${h(nombreMateria(act.c.m, act.c.g))}</a>`;
   return html;
 }
 function vistaHorario(v) {
   $('#titulo').textContent = 'Mi horario';
-  const hz = horario(), ahora = new Date(), d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
+  const ahora = new Date(), d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
   if (!S.diaHorario) S.diaHorario = d >= 1 && d <= 5 ? d : 1;
   const ds = S.diaHorario, editar = !!S.editarHorario;
+  const escs = escuelas().filter(e => escuelasEnUso().some(x => x.id === e.id) || Object.keys(horarioEsc(e.id).clases || {}).length);
+  const bloque = e => {
+    const hz = horarioEsc(e.id), hay = (hz.modulos || []).some(x => hz.clases[ds + '-' + x.n]);
+    const cab = escs.length > 1 ? `<h3 class="h-esc">${h(e.corto)}${hz.modulos && hz.modulos.length ? ` <span class="tenue">${hz.modulos[0].ini}–${hz.modulos[hz.modulos.length - 1].fin}</span>` : ''}</h3>` : '';
+    if (!hay && !editar) return cab + `<p class="tenue" style="margin:.2rem 0 .8rem">Sin clases este día.</p>`;
+    return cab + `<ol class="h-lista">${(hz.modulos || []).map(mod => {
+      if (mod.n === 'R') return `<li class="h-receso"><span class="h-t">${mod.ini}</span><span>Receso</span></li>`;
+      const c = hz.clases[ds + '-' + mod.n];
+      const est = ds === d ? (m >= aMin(mod.ini) && m < aMin(mod.fin) ? ' actual' : m >= aMin(mod.fin) ? ' pasada' : '') : '';
+      const t = `<span class="h-t"><b>${mod.n}° mód.</b>${mod.ini}–${mod.fin}</span>`;
+      const lleva = !editar && c && grupo(c.g);
+      const tag = editar ? 'button' : lleva ? 'a' : 'div';
+      const attr = editar ? `type="button" data-mod="${mod.n}" data-esc="${h(e.id)}"` : lleva ? `href="#/lista/${encodeURIComponent(c.g)}/${c.m}"` : '';
+      const cont = c ? `<span class="h-c">${h(nombreGrupoH(c.g))}<small>${h(nombreMateria(c.m, c.g))}${lleva ? ' · tocar para pasar lista ›' : ''}</small></span>` : `<span class="h-c libre">Libre</span>`;
+      return `<li class="${c ? 'h-' + c.m : 'h-libre'}${est}"><${tag} class="h-fila" ${attr}>${t}${cont}</${tag}></li>`;
+    }).join('')}</ol>`;
+  };
   v.innerHTML = `
-  <section class="h-ahora" id="h-ahora" aria-live="polite">${tarjetaAhora(hz, ahora)}</section>
+  <section class="h-ahora" id="h-ahora" aria-live="polite">${tarjetaAhora(null, ahora)}</section>
   <div class="h-dias" role="tablist">${[1, 2, 3, 4, 5].map(x => `<button role="tab" data-d="${x}" class="${x === ds ? 'sel' : ''} ${x === d ? 'hoy' : ''}" aria-selected="${x === ds}">${DIAS[x].slice(0, 3)}</button>`).join('')}</div>
   ${editar ? '<div class="aviso">Modo modificar: toca un módulo para cambiar la clase. Los cambios se guardan y se sincronizan con tus otros dispositivos.</div>' : ''}
-  <ol class="h-lista">${hz.modulos.map(mod => {
-    if (mod.n === 'R') return `<li class="h-receso"><span class="h-t">${mod.ini}</span><span>Receso</span></li>`;
-    const c = hz.clases[ds + '-' + mod.n];
-    const est = ds === d ? (m >= aMin(mod.ini) && m < aMin(mod.fin) ? ' actual' : m >= aMin(mod.fin) ? ' pasada' : '') : '';
-    const t = `<span class="h-t"><b>${mod.n}° mód.</b>${mod.ini}–${mod.fin}</span>`;
-    const lleva = !editar && c && c.m === 'TEC' && grupo(c.g);
-    const tag = editar ? 'button' : lleva ? 'a' : 'div';
-    const attr = editar ? `type="button" data-mod="${mod.n}"` : lleva ? `href="#/lista/${encodeURIComponent(c.g)}"` : '';
-    const cont = c ? `<span class="h-c">${h(nombreGrupoH(c.g))}<small>${h(nombreMateria(c.m, c.g))}${lleva ? ' · tocar para pasar lista ›' : ''}</small></span>` : `<span class="h-c libre">Libre</span>`;
-    return `<li class="${c ? 'h-' + c.m : 'h-libre'}${est}"><${tag} class="h-fila" ${attr}>${t}${cont}</${tag}></li>`;
-  }).join('')}</ol>
+  ${escs.map(bloque).join('')}
   <div class="h-ley"><span class="h-TEC">Tecnología</span><span class="h-ART">Artes</span><span class="h-TUT">Tutoría</span></div>
   <div class="fila" style="margin-top:.9rem">
     <button class="btn ${editar ? 'primary' : ''}" data-acc="editar">${editar ? '✓ Terminar de modificar' : '✏️ Modificar horario'}</button>
-    ${editar ? '<button class="btn danger" data-acc="restaurar">Restaurar horario original</button>' : ''}
-  </div>
-  <p class="tenue">Por ahora solo Tecnología tiene lista de asistencia en la app; Artes y Tutoría se muestran para consulta.</p>`;
+    ${editar ? escs.map(e => `<button class="btn danger" data-acc="restaurar" data-esc="${h(e.id)}">Restaurar horario original${escs.length > 1 ? ' ' + h(e.corto) : ''}</button>`).join('') : ''}
+  </div>`;
   v.onclick = async ev => {
     const dia = ev.target.closest('[data-d]');
     if (dia) { S.diaHorario = Number(dia.dataset.d); render(); return; }
     const b = ev.target.closest('[data-acc],[data-mod]'); if (!b) return;
     if (b.dataset.acc === 'editar') { S.editarHorario = !editar; render(); }
     else if (b.dataset.acc === 'restaurar') {
-      if (!await confirmar('Restaurar horario', 'Se reemplazará tu horario por el original de 2026-2027. ¿Continuar?', 'Restaurar')) return;
-      await guardar([{ t: 'c', id: 'horario', d: horarioPrecargado() }]); toast('Horario restaurado.'); render();
-    } else if (b.dataset.mod) editarModulo(ds, b.dataset.mod);
+      const esc = b.dataset.esc;
+      if (!await confirmar('Restaurar horario', `Se reemplazará tu horario de ${escuela(esc).corto} por el original de 2026-2027. ¿Continuar?`, 'Restaurar')) return;
+      await guardarHorario(esc, precargadoDe(esc)); toast('Horario restaurado.'); render();
+    } else if (b.dataset.mod) editarModulo(ds, b.dataset.mod, b.dataset.esc || '202');
   };
 }
-async function editarModulo(dia, n) {
-  const hz = horario(), k = dia + '-' + n, c = hz.clases[k] || null, mod = hz.modulos.find(x => x.n === n);
-  const gs = grupos(); const ids = gs.length ? gs.map(g => g.id) : ['1A', '1B', '2A', '2B', '3A', '3B'];
+async function editarModulo(dia, n, esc = '202') {
+  const hz = horarioEsc(esc), k = dia + '-' + n, c = hz.clases[k] || null, mod = hz.modulos.find(x => x.n === n);
+  const gs = grupos().filter(g => (g.esc || '202') === esc);
+  const ids = gs.length ? gs.map(g => g.id) : [...new Set(Object.values(hz.clases).map(x => x.g))];
   const r = await dialogo({
-    titulo: `${DIAS[dia]} · ${n}° módulo (${mod.ini}–${mod.fin})`, ok: 'Guardar',
+    titulo: `${escuelasEnUso().length > 1 ? escuela(esc).corto + ' · ' : ''}${DIAS[dia]} · ${n}° módulo (${mod.ini}–${mod.fin})`, ok: 'Guardar',
     html: `<label class="campo"><span>Materia</span><select name="m"><option value="">Libre (sin clase)</option>${Object.entries(MATERIAS).map(([k2, t]) => `<option value="${k2}" ${c && c.m === k2 ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <label class="campo"><span>Grupo</span><select name="g">${ids.map(g => `<option value="${h(g)}" ${c && c.g === g ? 'selected' : ''}>${h(nombreGrupoH(g))}</option>`).join('')}</select></label>`
   });
   if (!r) return;
   const m = r.querySelector('[name=m]').value, g = r.querySelector('[name=g]').value;
   const clases = { ...hz.clases };
-  if (m) clases[k] = { m, g }; else delete clases[k];
-  await guardar([{ t: 'c', id: 'horario', d: { ...hz, clases } }]);
+  if (m && g) clases[k] = { m, g }; else delete clases[k];
+  await guardarHorario(esc, { ...hz, clases });
   toast('Horario guardado.'); render();
 }
-
 /* ---------------- Concentrado mensual ---------------- */
-function fechasDelMes(gid, anio, mes) {
+function fechasDelMes(gid, anio, mes, m = 'TEC') {
   const sc = sinClaseSet(), r = new Set();
   const ult = new Date(anio, mes + 1, 0).getDate();
-  for (let d = 1; d <= ult; d++) { const f = ymd(new Date(anio, mes, d)); if (esDiaDeClase(gid, f, sc)) r.add(f); }
+  for (let d = 1; d <= ult; d++) { const f = ymd(new Date(anio, mes, d)); if (esDiaDeClase(gid, f, sc, m)) r.add(f); }
   const pref = `${anio}-${String(mes + 1).padStart(2, '0')}-`;
-  vivos('r').forEach(x => { if (x.d.g === gid && x.d.e && x.d.f.startsWith(pref)) r.add(x.d.f); });
+  vivos('r').forEach(x => { if (x.d.g === gid && matDe(x.d) === m && x.d.e && x.d.f.startsWith(pref)) r.add(x.d.f); });
   return [...r].sort();
 }
-function datosConcentrado(gid, anio, mes) {
+function datosConcentrado(gid, anio, mes, m = 'TEC') {
   const g = grupo(gid);
-  const fechas = fechasDelMes(gid, anio, mes);
+  const fechas = fechasDelMes(gid, anio, mes, m);
   const ini = ymd(new Date(anio, mes, 1)), fin = ymd(new Date(anio, mes + 1, 0));
   const alumnos = ordenar(alumnosDe(gid), S.meta.orden || 'reporte').filter(s => {
     const b = bajaVigente(s);
-    return !(b && b.desde < ini && !fechas.some(f => estado(s.id, f)));   // se omite si ya no venía desde antes del periodo
+    return !(b && b.desde < ini && !fechas.some(f => estado(s.id, f, m)));   // se omite si ya no venía desde antes del periodo
   });
   const filas = alumnos.map(s => {
     let a = 0, fa = 0;
     const celdas = fechas.map(f => {
       const bj = bajaEn(s, f);
       if (bj) return { m: 'B', c: 'b' };
-      const e = estado(s.id, f);
+      const e = estado(s.id, f, m);
       if (e === 'A') { a++; return { m: 'A' }; }
       if (e === 'F') { fa++; return { m: 'F' }; }
       return { m: '–', c: 'sr' };
@@ -1062,14 +1149,15 @@ function datosConcentrado(gid, anio, mes) {
     return { s, celdas, a, fa, bajas: bajasPer };
   });
   const omitidos = alumnosDe(gid).length - alumnos.length;
-  return { g, fechas, filas, omitidos, periodo: `${MESES[mes]} ${anio}` };
+  return { g, m, fechas, filas, omitidos, periodo: `${MESES[mes]} ${anio}` };
 }
 function htmlConcentrado(dat) {
   const c = config();
   const { g, fechas, filas, periodo } = dat;
+  const esc = g.esc || '202', mat = nombreMateria(dat.m || 'TEC', g.id), cct = escuela(esc).cct;
   return `<section class="rep-pagina rep">
-    <div class="rep-cab"><div>${c.escuela ? `<p>${h(c.escuela)}</p>` : ''}<h3>Concentrado de asistencia · ${h(g.nombre)}${c.asignatura ? ' · ' + h(c.asignatura) : ''}</h3></div><p><b>Periodo:</b> ${h(periodo)}</p></div>
-    <table class="rep-t"><thead><tr><th colspan="${fechas.length + 4}" class="tcab">${h(g.nombre)} · ${h(periodo)}</th></tr><tr><th>No.</th><th style="text-align:left">Alumno</th>${fechas.map(f => { const d = aFecha(f); return `<th class="dia">${DIA_LETRA[d.getDay()]}<br>${d.getDate()}</th>`; }).join('')}<th>Total A</th><th>Total F</th></tr></thead>
+    <div class="rep-cab"><div><p>${h(nombreEscuelaReporte(esc))}${cct ? ' · C.C.T. ' + h(cct) : ''}</p><h3>Concentrado de asistencia · ${h(g.nombre)} · ${h(mat)}</h3></div><p><b>Periodo:</b> ${h(periodo)}</p></div>
+    <table class="rep-t"><thead><tr><th colspan="${fechas.length + 4}" class="tcab">${h(g.nombre)} · ${h(mat)} · ${h(periodo)}</th></tr><tr><th>No.</th><th style="text-align:left">Alumno</th>${fechas.map(f => { const d = aFecha(f); return `<th class="dia">${DIA_LETRA[d.getDay()]}<br>${d.getDate()}</th>`; }).join('')}<th>Total A</th><th>Total F</th></tr></thead>
     <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.bajas.map(b => `<small>Ya no viene desde ${fmtF(b.desde)}${b.hasta ? ` · regresó ${fmtF(b.hasta)}` : ''}</small>`).join('')}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.a}</td><td class="tot">${r.fa}</td></tr>`).join('') : `<tr><td colspan="${fechas.length + 4}">Sin alumnos</td></tr>`}</tbody></table>
     ${fechas.length ? '' : '<p class="rep-ley"><b>No hay días de clase configurados en este periodo.</b></p>'}
     <p class="rep-ley">A = asistencia · F = falta · – = sin registrar (no cuenta como falta) · B = ya no viene (después de su fecha de baja; no cuenta como falta).${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
@@ -1092,7 +1180,8 @@ function vistaReporte(v) {
   <div class="card"><h2>Concentrado mensual</h2>
     <div class="tabs" id="r-tipo"><a href="javascript:void 0" data-t="asis" class="${sel.tipo === 'asis' ? 'activo' : ''}">✓ Asistencia</a><a href="javascript:void 0" data-t="trab" class="${sel.tipo === 'trab' ? 'activo' : ''}">📝 Trabajos</a></div>
     <div class="fila">
-      <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Los ${gs.length} grupos</option>${gs.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(g.nombre)}</option>`).join('')}</select></label>
+      <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Todos los grupos</option>${escuelasEnUso().map(e => { const l = gs.filter(g => (g.esc || '202') === e.id); return (escuelasEnUso().length > 1 ? `<option value="esc:${h(e.id)}" ${sel.g === 'esc:' + e.id ? 'selected' : ''}>Todos · ${h(e.corto)}</option>` : '') + l.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(nombreGrupoL(g.id))}</option>`).join(''); }).join('')}</select></label>
+      <label class="campo" style="flex:1;min-width:140px"><span>Materia</span><select id="r-mat"><option value="*">Todas</option>${(sel.g.startsWith('esc:') || sel.g === '*' ? ORDEN_MAT.filter(m => gs.some(g => materiasDe(g.id).includes(m))) : materiasDe(sel.g)).map(m => `<option value="${m}" ${sel.mat === m ? 'selected' : ''}>${h(sel.g !== '*' && !sel.g.startsWith('esc:') ? nombreMateria(m, sel.g) : MATERIAS[m] || m)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1;min-width:140px"><span>Mes</span><select id="r-m">${MESES.map((m, i) => `<option value="${i}" ${sel.mes === i ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       <label class="campo" style="width:110px"><span>Año</span><select id="r-a">${anios.map(a => `<option ${sel.anio === a ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
     </div>
@@ -1101,13 +1190,20 @@ function vistaReporte(v) {
     <p class="tenue">En la ventana de impresión elige <b>«Guardar como PDF»</b> como destino para descargarlo. Tamaño carta; la orientación se ajusta sola.</p>
   </div>
   <div class="card scroll" id="r-prev"></div>`;
-  const ids = () => sel.g === '*' ? gs.map(g => g.id) : [sel.g];
+  if (!sel.mat) sel.mat = '*';
+  const ids = () => sel.g === '*' ? gs.map(g => g.id) : sel.g.startsWith('esc:') ? gs.filter(g => (g.esc || '202') === sel.g.slice(4)).map(g => g.id) : [sel.g];
+  const combos = () => ids().flatMap(id => materiasDe(id).filter(m => sel.mat === '*' || m === sel.mat).map(m => [id, m]));
   const esTrab = () => sel.tipo === 'trab';
-  const datos = () => ids().map(id => esTrab() ? datosTrabajos(id, sel.anio, sel.mes) : datosConcentrado(id, sel.anio, sel.mes));
+  const datos = () => {
+    const l = combos().map(([id, m]) => esTrab() ? datosTrabajos(id, sel.anio, sel.mes, m) : datosConcentrado(id, sel.anio, sel.mes, m));
+    const conAlgo = esTrab() ? l.filter(x => x.acts.length) : l;
+    return conAlgo.length ? conAlgo : l.slice(0, 1);
+  };
   const pintar = () => { $('#r-prev').innerHTML = datos().map(esTrab() ? htmlTrabajos : htmlConcentrado).join('<hr>'); };
   $$('#r-tipo a').forEach(a => a.onclick = e => { e.preventDefault(); sel.tipo = a.dataset.t; render(); });
   pintar();
-  $('#r-g').onchange = e => { sel.g = e.target.value; pintar(); };
+  $('#r-g').onchange = e => { sel.g = e.target.value; if (sel.mat !== '*' && !sel.g.startsWith('esc:') && sel.g !== '*' && !materiasDe(sel.g).includes(sel.mat)) sel.mat = '*'; render(); };
+  $('#r-mat').onchange = e => { sel.mat = e.target.value; pintar(); };
   $('#r-m').onchange = e => { sel.mes = Number(e.target.value); pintar(); };
   $('#r-a').onchange = e => { sel.anio = Number(e.target.value); pintar(); };
   $('#r-imprimir').onclick = () => imprimir(datos(), esTrab() ? htmlTrabajos : htmlConcentrado, esTrab() ? 'acts' : 'fechas');
@@ -1115,23 +1211,23 @@ function vistaReporte(v) {
     const filas = [];
     if (esTrab()) {
       datos().forEach(dat => {
-        filas.push([`${dat.g.nombre} — trabajos con entrega en ${dat.periodo}`]);
+        filas.push([`${nombreGrupoL(dat.g.id)} · ${nombreMateria(dat.m, dat.g.id)} — trabajos con entrega en ${dat.periodo}`]);
         filas.push(['No.', 'ID', 'Alumno', ...dat.acts.map(a => `${a.nombre} (${fmtF(a.entrega)})`), 'Terminados', 'Avances', 'No hizo nada', 'Ya no viene desde']);
         dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.t.T, r.t.A, r.t.N, r.baja ? fmtF(r.baja.desde) : '']));
         filas.push([]);
       });
       filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene']);
-      descargar(`trabajos_${sel.g === '*' ? 'todos' : sel.g}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+      descargar(`trabajos_${sel.g === '*' ? 'todos' : sel.g.replace('esc:', 'esc')}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
       return;
     }
     datos().forEach(dat => {
-      filas.push([`${dat.g.nombre} — ${dat.periodo}`]);
+      filas.push([`${nombreGrupoL(dat.g.id)} · ${nombreMateria(dat.m, dat.g.id)} — ${dat.periodo}`]);
       filas.push(['No.', 'ID', 'Alumno', ...dat.fechas.map(fmtF), 'Total asistencias', 'Total faltas', 'Ya no viene desde']);
       dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.a, r.fa, r.bajas.map(b => fmtF(b.desde)).join(' ')]));
       filas.push([]);
     });
     filas.push(['A = asistencia; F = falta; SR = sin registrar; B = ya no viene']);
-    descargar(`concentrado_${sel.g === '*' ? 'todos' : sel.g}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+    descargar(`concentrado_${sel.g === '*' ? 'todos' : sel.g.replace('esc:', 'esc')}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
   };
 }
 function imprimir(lista, plantilla = htmlConcentrado, campo = 'fechas') {
@@ -1154,12 +1250,13 @@ function describir(k, val) {
   if (k.startsWith('g:')) return `${d.nombre} · días: ${(d.dias || []).map(x => DIAS[x].slice(0, 3)).join(', ') || 'ninguno'}`;
   if (k.startsWith('w:')) return TRAB_TXT[d.e || ''];
   if (k.startsWith('a:')) return `${d.nombre} · entrega ${fmtF(d.entrega)}`;
-  if (k === 'c:horario') return `${Object.keys(d.clases || {}).length} clases por semana`;
+  if (/^c:horario/.test(k)) return `${Object.keys(d.clases || {}).length} clases por semana`;
   return 'Configuración general';
 }
 function tituloConflicto(c) {
   const d = (c.local && c.local.d) || (c.remote && c.remote.d) || {};
-  if (c.k.startsWith('r:')) { const s = alumno(d.s); const g = grupo(d.g); return `${g ? g.nombre + ' · ' : ''}${s ? nombreCompleto(s) : d.s} · ${fmtLargo(d.f)}`; }
+  if (c.k.startsWith('r:')) { const s = alumno(d.s); const g = grupo(d.g); return `${g ? nombreGrupoL(d.g) + ' · ' : ''}${nombreMateria(matDe(d), d.g)} · ${s ? nombreCompleto(s) : d.s} · ${fmtLargo(d.f)}`; }
+  if (/^c:horario/.test(c.k)) return 'Horario de clases';
   if (c.k.startsWith('s:')) return 'Datos del alumno ' + nombreCompleto(d);
   if (c.k.startsWith('g:')) return 'Datos del grupo ' + (d.nombre || '');
   if (c.k.startsWith('w:')) { const s = alumno(d.s), a = actividad(d.a); return `Trabajo «${a ? a.nombre : ''}» · ${s ? nombreCompleto(s) : d.s}`; }
@@ -1351,20 +1448,19 @@ async function restaurarRespaldo(file) {
   return true;
 }
 function exportarTrabajosCSV() {
-  const filas = [['Grupo', 'Actividad', 'Fecha de entrega', 'ID alumno', 'Alumno', 'Estado', 'Fecha en que se marcó', 'Entrega tardía']];
+  const filas = [['Escuela', 'Grupo', 'Materia', 'Actividad', 'Fecha de entrega', 'ID alumno', 'Alumno', 'Estado', 'Fecha en que se marcó', 'Entrega tardía']];
   vivos('w').filter(w => w.d.e).map(w => w.d).sort((a, b) => (a.g + a.a).localeCompare(b.g + b.a)).forEach(w => {
     const a = actividad(w.a), s = alumno(w.s), g = grupo(w.g); if (!a) return;
-    filas.push([g ? g.nombre : w.g, a.nombre, a.entrega, w.s, s ? nombreCompleto(s) : '(eliminado)', TRAB_TXT[w.e], w.f || '', w.e === 'T' && w.f > a.entrega ? 'Sí' : '']);
+    filas.push([escuela(escDe(w.g)).corto, g ? g.nombre : w.g, nombreMateria(matDe(a), w.g), a.nombre, a.entrega, w.s, s ? nombreCompleto(s) : '(eliminado)', TRAB_TXT[w.e], w.f || '', w.e === 'T' && w.f > a.entrega ? 'Sí' : '']);
   });
   descargar(`trabajos_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
 }
 function exportarRegistrosCSV() {
-  const filas = [['Grupo', 'ID alumno', 'Alumno', 'Fecha', 'Estado', 'Ya no viene desde']];
-  const regs = vivos('r').filter(r => r.d.e).sort((a, b) => (a.d.g + a.d.f).localeCompare(b.d.g + b.d.f));
-  regs.forEach(r => { const s = alumno(r.d.s), g = grupo(r.d.g); filas.push([g ? g.nombre : r.d.g, r.d.s, s ? nombreCompleto(s) : '(eliminado)', r.d.f, ESTADO_TXT[r.d.e], s && bajaVigente(s) ? bajaVigente(s).desde : '']); });
+  const filas = [['Escuela', 'Grupo', 'Materia', 'ID alumno', 'Alumno', 'Fecha', 'Estado', 'Ya no viene desde']];
+  const regs = vivos('r').filter(r => r.d.e).sort((a, b) => (a.d.g + matDe(a.d) + a.d.f).localeCompare(b.d.g + matDe(b.d) + b.d.f));
+  regs.forEach(r => { const s = alumno(r.d.s), g = grupo(r.d.g); filas.push([escuela(escDe(r.d.g)).corto, g ? g.nombre : r.d.g, nombreMateria(matDe(r.d), r.d.g), r.d.s, s ? nombreCompleto(s) : '(eliminado)', r.d.f, ESTADO_TXT[r.d.e], s && bajaVigente(s) ? bajaVigente(s).desde : '']); });
   descargar(`registros_asistencia_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
 }
-
 /* ---------------- Vista: Configuración ---------------- */
 function vistaConfig(v) {
   $('#titulo').textContent = 'Configuración y respaldo';
@@ -1390,7 +1486,7 @@ function vistaConfig(v) {
   </div>
   <div class="card"><h2>Alumnos y grupos</h2>
     <p><a class="btn primary" href="#/importar">Importar o actualizar desde el archivo «reporte»</a></p>
-    ${gs.length ? `<ul class="lista-simple">${gs.map(g => `<li><span><b>${h(g.nombre)}</b> · ${alumnosDe(g.id).filter(s => !bajaVigente(s)).length} activos · clase: ${(g.dias || []).map(d => DIAS[d].slice(0, 3)).join(', ') || '<b>sin días configurados</b>'}</span><a class="btn small" href="#/grupo/${encodeURIComponent(g.id)}">Administrar</a></li>`).join('')}</ul>` : '<p class="tenue">Sin grupos todavía.</p>'}
+    ${gs.length ? `<ul class="lista-simple">${gs.map(g => `<li><span><b>${h(nombreGrupoL(g.id))}</b> · ${alumnosDe(g.id).filter(s => !bajaVigente(s)).length} activos · ${materiasDe(g.id).map(m => `${h(nombreMateria(m, g.id))}: ${diasDe(g.id, m).map(d => DIAS[d].slice(0, 3)).join(', ') || 'sin días'}`).join(' · ') || '<b>sin materias en el horario</b>'}</span><a class="btn small" href="#/grupo/${encodeURIComponent(g.id)}">Administrar</a></li>`).join('')}</ul>` : '<p class="tenue">Sin grupos todavía.</p>'}
   </div>
   <div class="card"><h2>Calendario escolar</h2>
     <div class="fila"><label class="campo" style="flex:1"><span>Inicio de clases</span><input type="date" id="c-ini" value="${h(c.inicio || '')}"></label><label class="campo" style="flex:1"><span>Fin de clases</span><input type="date" id="c-fin" value="${h(c.fin || '')}"></label></div>
@@ -1401,8 +1497,7 @@ function vistaConfig(v) {
     <p class="tenue">Precargado con el calendario SEP 2026-2027 (suspensiones, CTE y vacaciones). Revísalo y ajústalo si tu escuela tiene otros días.</p>
   </div>
   <div class="card"><h2>Datos del concentrado</h2>
-    <label class="campo"><span>Escuela</span><input type="text" id="c-esc" value="${h(c.escuela || '')}"></label>
-    <label class="campo"><span>Asignatura</span><input type="text" id="c-asig" value="${h(c.asignatura || '')}"></label>
+    <label class="campo"><span>Nombre de la EST 202 en el concentrado</span><input type="text" id="c-esc" value="${h(c.escuela || '')}"></label>
     <label class="campo"><span>Nombre del docente (aparece junto a la firma)</span><input type="text" id="c-doc" value="${h(c.docente || '')}"></label>
     <button class="btn" id="c-guardar">Guardar datos</button>
   </div>
@@ -1438,7 +1533,7 @@ function vistaConfig(v) {
   const guardarCfg = async (cambio, msg) => { await guardar([{ t: 'c', id: 'general', d: { ...config(), ...cambio } }]); if (msg) toast(msg); };
   $('#c-ini').onchange = e => guardarCfg({ inicio: e.target.value }, 'Inicio de clases guardado.');
   $('#c-fin').onchange = e => guardarCfg({ fin: e.target.value }, 'Fin de clases guardado.');
-  on('c-guardar', () => guardarCfg({ escuela: $('#c-esc').value.trim(), asignatura: $('#c-asig').value.trim(), docente: $('#c-doc').value.trim() }, 'Datos guardados.'));
+  on('c-guardar', () => guardarCfg({ escuela: $('#c-esc').value.trim(), docente: $('#c-doc').value.trim() }, 'Datos guardados.'));
   on('sc-add', async () => {
     const f = $('#sc-f').value; if (!f) { toast('Elige una fecha.'); return; }
     const l = (config().sinClase || []).filter(x => x.f !== f); l.push({ f, m: $('#sc-m').value.trim() });
@@ -1470,10 +1565,10 @@ async function iniciar() {
   setInterval(() => {
     if (S.vistaActual !== 'lista' || $('#dlg').open) return;
     const r = ruta(), g = r.args[0]; if (!g || !grupo(g)) return;
-    const f = S.fechaLista, est = g + '|' + f + '|' + listaBloqueada(g, f) + '|' + bloqueoNatural(f);
-    if (est !== S.estadoBloqueo) { const a = document.activeElement; if (a && a.id === 'buscar') return; const y = window.scrollY; render(); window.scrollTo(0, y); if (listaBloqueada(g, f)) toast('La lista se bloqueó.'); }
+    const f = S.fechaLista, m = S.mat || 'TEC', est = g + '|' + f + '|' + m + '|' + listaBloqueada(g, f, m) + '|' + bloqueoNatural(f, escDe(g));
+    if (est !== S.estadoBloqueo) { const a = document.activeElement; if (a && a.id === 'buscar') return; const y = window.scrollY; render(); window.scrollTo(0, y); if (listaBloqueada(g, f, m)) toast('La lista se bloqueó.'); }
   }, 15000);
-  setInterval(() => { if (S.vistaActual === 'horario' && document.visibilityState === 'visible' && !$('#dlg').open) { const x = $('#h-ahora'); if (x) x.innerHTML = tarjetaAhora(horario(), new Date()); } }, 30000);
+  setInterval(() => { if (S.vistaActual === 'horario' && document.visibilityState === 'visible' && !$('#dlg').open) { const x = $('#h-ahora'); if (x) x.innerHTML = tarjetaAhora(null, new Date()); } }, 30000);
   alCambiarRuta();
   sincronizar(false);
   registrarSW();

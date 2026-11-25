@@ -196,3 +196,15 @@ button.h-fila:hover{border-color:#b9a6cf}
 .bloqueo{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between;background:#eef1f5;border:2px solid var(--gris);border-radius:10px;padding:.5rem .7rem;margin:.5rem 0}
 .bloqueo.abierto{background:var(--ambar-f);border-color:var(--ambar)}
 .b-est:disabled,.btn:disabled{opacity:.4;cursor:not-allowed;filter:grayscale(.4)}
+/* Escuelas y materias */
+.esc-tit{font-size:1.05rem;color:var(--tenue);margin:1rem 0 .4rem;text-transform:uppercase;letter-spacing:.04em}
+.mats{display:flex;flex-wrap:wrap;gap:.35rem;margin:-.2rem 0 .6rem}
+.mats a{flex:1;min-width:6.5rem;display:flex;align-items:center;justify-content:center;min-height:42px;padding:.2rem .6rem;border-radius:999px;border:2px solid var(--borde);background:#fff;text-decoration:none;font-weight:700;color:var(--tenue);font-size:.92rem}
+.mats a.activo.mat-TEC{background:#1f4e79;border-color:#1f4e79;color:#fff}
+.mats a.activo.mat-ART{background:#9a3412;border-color:#9a3412;color:#fff}
+.mats a.activo.mat-TUT{background:#166534;border-color:#166534;color:#fff}
+.sub-mat{display:inline-block;font-size:.8rem;font-weight:700;padding:.1rem .5rem;border-radius:6px;vertical-align:middle;margin-left:.2rem}
+.sub-mat.mat-TEC{background:#e3eef9;color:#1f4e79}.sub-mat.mat-ART{background:#fdebdc;color:#9a3412}.sub-mat.mat-TUT{background:#dcf5e3;color:#166534}
+.sub-esc{display:inline-block;font-size:.75rem;font-weight:600;color:var(--tenue);border:1px solid var(--borde);padding:.05rem .4rem;border-radius:6px;vertical-align:middle;margin-left:.3rem}
+.h-esc{margin:.9rem 0 .4rem;font-size:1rem;color:#5b2a86}
+label.chk{display:inline-flex;align-items:center;gap:.3rem;border:2px solid var(--borde);border-radius:8px;padding:.3rem .6rem;min-height:40px;background:#fff}
