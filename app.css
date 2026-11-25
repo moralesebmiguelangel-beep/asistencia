@@ -227,3 +227,9 @@ label.chk{display:inline-flex;align-items:center;gap:.3rem;border:2px solid var(
 .barra-esc.esc-184{background:#0f766e}
 .barra-esc .btn{background:#fff;color:var(--texto);border-color:#fff;min-height:34px}
 .h-otra{margin-top:.6rem;padding:.5rem .6rem;border-radius:8px;background:#fff7d6;border:1px solid #e3c26b;font-size:.92rem}
+/* Evaluación continua */
+.rep h2.rep-titulo{font-size:20pt;letter-spacing:.06em;margin:.15rem 0 .1rem;font-weight:800}
+.rep .rep-cab h3{font-size:12pt}
+table.rep-t th.dia small{font-weight:400;font-size:7.5pt}
+.ev-dia{background:#f8fafc}
+.ev-dia .campo{margin:.2rem 0}

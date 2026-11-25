@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -303,7 +303,7 @@ function render() {
       case 'config': vistaConfig(v); break;
       case 'importar': vistaImportar(v); break;
       case 'grupo': vistaGrupo(v, r.args[0]); break;
-      case 'trabajos': vistaTrabajos(v, r.args[0]); break;
+      case 'trabajos': vistaTrabajos(v, r.args[0], r.args[1]); break;
       case 'trabajo': vistaTrabajo(v, r.args[0], r.args[1]); break;
       case 'conflictos': vistaConflictos(v); break;
       case 'horario': vistaHorario(v); break;
@@ -904,8 +904,8 @@ function contarTrab(a, lista) {
   return c;
 }
 function tabsGrupo(gid, activo) {
-  const g = encodeURIComponent(gid);
-  return `<div class="tabs" role="tablist"><a role="tab" href="#/lista/${g}" class="${activo === 'l' ? 'activo' : ''}" aria-selected="${activo === 'l'}">✓ Asistencia</a><a role="tab" href="#/trabajos/${g}" class="${activo === 't' ? 'activo' : ''}" aria-selected="${activo === 't'}">📝 Trabajos</a></div>`;
+  const g = encodeURIComponent(gid), m = S.mat && materiasDe(gid).includes(S.mat) ? '/' + S.mat : '';
+  return `<div class="tabs" role="tablist"><a role="tab" href="#/lista/${g}${m}" class="${activo === 'l' ? 'activo' : ''}" aria-selected="${activo === 'l'}">✓ Asistencia</a><a role="tab" href="#/trabajos/${g}${m}" class="${activo === 't' ? 'activo' : ''}" aria-selected="${activo === 't'}">📝 Trabajos</a></div>`;
 }
 async function dialogoActividad(gid, a) {
   const mats = materiasDe(gid); const mSel = a ? matDe(a) : (mats.includes(S.mat) ? S.mat : (materiaDeHoy(gid) || mats[0] || 'TEC'));
@@ -925,29 +925,116 @@ async function dialogoActividad(gid, a) {
   await guardar([{ t: 'a', id, d }]);
   return d;
 }
-function vistaTrabajos(v, gid) {
+function idDiaria(gid, m, f) { return 'd-' + gid + '-' + m + '-' + f; }
+function proyectoActual(gid, m) { const it = S.items.get('c:proy-' + gid + '-' + m); return it && !it.del ? (it.d.nombre || '') : ''; }
+function nombreAct(a) { return a.nombre || (a.diaria ? 'Actividad del día' : 'Actividad'); }
+function actDiariaPseudo(gid, m, f) { return actividad(idDiaria(gid, m, f)) || { id: idDiaria(gid, m, f), g: gid, m, nombre: '', entrega: f, creada: f, diaria: true }; }
+function vistaTrabajos(v, gid, mArg) {
   const g = grupo(gid);
   if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
   if (S.meta['ultimoGrupo_' + escDe(gid)] !== gid) setMeta('ultimoGrupo_' + escDe(gid), gid);
   $('#titulo').textContent = 'Trabajos · ' + g.nombre;
-  const acts = actividadesDe(gid), f = hoy();
+  const f = S.fechaTrab || (S.fechaTrab = hoy());
+  const mats = materiasDe(gid), mh = materiaDeHoy(gid, f);
+  const m = mats.includes(mArg) ? mArg : (mh && mats.includes(mh) ? mh : (mats[0] || 'TEC'));
+  S.mat = m;
+  const a = actDiariaPseudo(gid, m, f), proy = proyectoActual(gid, m);
+  const clase = esDiaDeClase(gid, f, sinClaseSet(), m), motivo = sinClaseSet().get(f);
+  const modo = S.meta.orden || 'reporte';
+  const otras = actividadesDe(gid).filter(x => !x.diaria), hoyS = hoy();
   v.innerHTML = `${tabsGrupo(gid, 't')}
-  <div class="cab-lista"><h2>${h(g.nombre)}</h2><button class="btn primary" data-acc="nueva">+ Nueva actividad</button></div>
-  ${acts.length ? `<ul class="lista-act">${acts.map(a => {
-    const c = contarTrab(a, alumnosDeActividad(a));
-    const venc = a.entrega < f;
-    return `<li><a class="act" href="#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(a.id)}">
-      <b>${h(a.nombre)}${materiasDe(gid).length > 1 ? ` <span class="sub-mat mat-${matDe(a)}">${h(nombreMateria(matDe(a), gid))}</span>` : ''}</b>
-      <span class="tenue">Entrega: ${h(fmtLargo(a.entrega))}${a.entrega === f ? ' (hoy)' : venc ? ' · vencida' : ''}</span>
-      <span class="mini"><span class="m-T">✓ ${c.T} terminaron</span><span class="m-A">◐ ${c.A} avance</span><span class="m-N">✗ ${c.N} nada</span><span class="m-p">${c.p} sin registrar</span></span></a></li>`;
-  }).join('')}</ul>` : `<div class="card"><p>Aún no hay actividades en ${h(g.nombre)}.</p><p class="tenue">Crea una con «+ Nueva actividad», ponle su fecha de entrega y marca quién terminó, quién avanzó y quién no hizo nada.</p></div>`}`;
+  ${mats.length > 1 ? `<div class="mats" role="tablist">${mats.map(x => `<a role="tab" href="#/trabajos/${encodeURIComponent(gid)}/${x}" class="mat-${x} ${x === m ? 'activo' : ''}" aria-selected="${x === m}">${h(nombreMateria(x, gid))}</a>`).join('')}</div>` : ''}
+  <div class="cab-lista">
+    <h2>${h(g.nombre)} <span class="sub-mat mat-${m}">${h(nombreMateria(m, gid))}</span></h2>
+    <div class="fecha-sel">
+      <button class="btn" data-acc="dia-ant" aria-label="Día de clase anterior">◀</button>
+      <input type="date" id="fecha-trab" value="${f}" aria-label="Fecha de la actividad">
+      <button class="btn" data-acc="dia-sig" aria-label="Día de clase siguiente">▶</button>
+    </div>
+  </div>
+  <div class="tenue">${h(fmtLargo(f))}${f === hoyS ? ' (hoy)' : ''}${clase ? '' : ` · <b>${motivo ? h(motivo) : 'No hay clase de esta materia este día'}</b>; puedes registrar igualmente.`}</div>
+  <div class="card ev-dia">
+    <h3 style="margin-top:0">Evaluación continua · actividad del día</h3>
+    <div class="fila">
+      <label class="campo" style="flex:1;min-width:200px"><span>Proyecto en curso (opcional)</span><input type="text" id="proy" maxlength="120" value="${h(proy)}" placeholder="Ej. Revista EcoGeovillas"></label>
+      <label class="campo" style="flex:1;min-width:200px"><span>Actividad de este día (opcional)</span><input type="text" id="act-nombre" maxlength="120" value="${h(a.nombre)}" placeholder="Ej. Portada de la revista"></label>
+    </div>
+  </div>
+  <div class="contadores c4" id="contadores"></div>
+  <div class="herr">
+    <input type="search" id="buscar" placeholder="Buscar alumno…" value="${h(S.busqueda)}" aria-label="Buscar por nombre">
+    <button class="btn" data-acc="orden">${modo === 'az' ? 'Orden: A–Z' : 'Orden: reporte'}</button>
+    <button class="btn todos" data-acc="todosT">Marcar «Terminó» a los pendientes</button>
+  </div>
+  <ul class="alumnos" id="alumnos"></ul>
+  <div class="card" style="margin-top:1rem"><div class="cab-lista" style="margin:0"><h3 style="margin:0">Actividades con fecha de entrega</h3><button class="btn" data-acc="nueva">+ Nueva actividad</button></div>
+    <p class="tenue" style="margin:.3rem 0 .5rem">Para tareas o entregas de varios días (por ejemplo, el producto final del proyecto).</p>
+    ${otras.length ? `<ul class="lista-act">${otras.map(x => {
+      const c = contarTrab(x, alumnosDeActividad(x));
+      const venc = x.entrega < hoyS;
+      return `<li><a class="act" href="#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(x.id)}">
+        <b>${h(nombreAct(x))}${mats.length > 1 ? ` <span class="sub-mat mat-${matDe(x)}">${h(nombreMateria(matDe(x), gid))}</span>` : ''}</b>
+        <span class="tenue">Entrega: ${h(fmtLargo(x.entrega))}${x.entrega === hoyS ? ' (hoy)' : venc ? ' · vencida' : ''}</span>
+        <span class="mini"><span class="m-T">✓ ${c.T} terminaron</span><span class="m-A">◐ ${c.A} avance</span><span class="m-N">✗ ${c.N} nada</span><span class="m-p">${c.p} sin registrar</span></span></a></li>`;
+    }).join('')}</ul>` : '<p class="tenue">No hay actividades con fecha de entrega.</p>'}
+  </div>`;
+  pintarTrabDia(gid, m, f);
+  $('#fecha-trab').onchange = e => { if (e.target.value) { S.fechaTrab = e.target.value; render(); } };
+  $('#buscar').oninput = e => { S.busqueda = e.target.value; pintarTrabDia(gid, m, f); };
+  $('#proy').onchange = async e => {
+    const nombre = e.target.value.trim();
+    const cambios = [{ t: 'c', id: 'proy-' + gid + '-' + m, d: { nombre } }];
+    const act = actividad(idDiaria(gid, m, f)); if (act) cambios.push({ t: 'a', id: act.id, d: { ...act, p: nombre } });
+    await guardar(cambios); toast('Proyecto guardado.');
+  };
+  $('#act-nombre').onchange = async e => {
+    const nombre = e.target.value.trim(), act = actividad(idDiaria(gid, m, f));
+    if (!act && !nombre) return;
+    await guardar([{ t: 'a', id: idDiaria(gid, m, f), d: { ...actDiariaPseudo(gid, m, f), nombre, p: act ? act.p || '' : proyectoActual(gid, m) } }]);
+    toast('Actividad guardada.');
+  };
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
-    if (b.dataset.acc === 'nueva') {
-      const a = await dialogoActividad(gid);
-      if (a) location.hash = `#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(a.id)}`;
+    const acc = b.dataset.acc;
+    if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaTrab = diaDeClaseVecino(gid, S.fechaTrab, acc === 'dia-sig' ? 1 : -1, m); render(); }
+    else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
+    else if (acc === 'wT' || acc === 'wA' || acc === 'wN') marcarTrabDia(gid, m, f, [b.dataset.s], acc.slice(1));
+    else if (acc === 'todosT') {
+      const act = actDiariaPseudo(gid, m, f);
+      const pend = alumnosDeLista(gid, f).filter(s => !estTrab(act.id, s.id)).map(s => s.id);
+      if (!pend.length) { toast('No hay alumnos pendientes.'); return; }
+      await marcarTrabDia(gid, m, f, pend, 'T', true);
+      toast(`Se marcó «Terminó» a ${pend.length} alumno(s).`, { accion: 'Deshacer', ms: 10000, alPulsar: async () => { await guardar(pend.map(sid => ({ t: 'w', id: act.id + '|' + sid, d: { a: act.id, s: sid, g: gid, e: '', f } }))); render(); } });
+    }
+    else if (acc === 'nueva') {
+      const nueva = await dialogoActividad(gid);
+      if (nueva) location.hash = `#/trabajo/${encodeURIComponent(gid)}/${encodeURIComponent(nueva.id)}`;
     }
   };
+}
+function pintarTrabDia(gid, m, f) {
+  const a = actDiariaPseudo(gid, m, f), q = claveNombre(S.busqueda), lista = alumnosDeLista(gid, f);
+  const ul = $('#alumnos'); if (!ul) return;
+  ul.innerHTML = lista.map((s, i) => q && !claveNombre(nombreCompleto(s)).includes(q) ? '' : filaTrab(s, i + 1, a)).join('')
+    || `<li class="tenue">${lista.length ? 'Ningún alumno coincide con la búsqueda.' : 'No hay alumnos activos.'}</li>`;
+  const c = contarTrab(a, lista), el = $('#contadores');
+  if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
+}
+async function marcarTrabDia(gid, m, f, sids, e, forzar = false) {
+  const existe = actividad(idDiaria(gid, m, f)), a = actDiariaPseudo(gid, m, f);
+  const cambios = [];
+  if (!existe) { const nom = $('#act-nombre') ? $('#act-nombre').value.trim() : ''; cambios.push({ t: 'a', id: a.id, d: { ...a, nombre: nom, p: proyectoActual(gid, m) } }); }
+  sids.forEach(sid => {
+    const nuevo = !forzar && estTrab(a.id, sid) === e ? '' : e;
+    cambios.push({ t: 'w', id: a.id + '|' + sid, d: { a: a.id, s: sid, g: gid, e: nuevo, f } });
+  });
+  await guardar(cambios);
+  if (sids.length === 1) {
+    const s = alumno(sids[0]), li = document.getElementById('al-' + sids[0]);
+    if (s && li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaTrab(s, n, actDiariaPseudo(gid, m, f)); }
+    const lista = alumnosDeLista(gid, f), c = contarTrab(actDiariaPseudo(gid, m, f), lista), el = $('#contadores');
+    if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
+  } else pintarTrabDia(gid, m, f);
 }
 function vistaTrabajo(v, gid, aid) {
   const g = grupo(gid), a = actividad(aid);
@@ -957,7 +1044,7 @@ function vistaTrabajo(v, gid, aid) {
   const venc = a.entrega < hoy();
   v.innerHTML = `${tabsGrupo(gid, 't')}
   <p style="margin:.2rem 0 .5rem"><a href="#/trabajos/${encodeURIComponent(gid)}">← Todas las actividades de ${h(g.nombre)}</a></p>
-  <div class="card"><h2 style="margin-bottom:.2rem">${h(a.nombre)}${materiasDe(gid).length > 1 ? ` <span class="sub-mat mat-${matDe(a)}">${h(nombreMateria(matDe(a), gid))}</span>` : ''}</h2>
+  <div class="card"><h2 style="margin-bottom:.2rem">${h(nombreAct(a))}${materiasDe(gid).length > 1 ? ` <span class="sub-mat mat-${matDe(a)}">${h(nombreMateria(matDe(a), gid))}</span>` : ''}</h2>
     <p style="margin:.2rem 0 .6rem">Entrega: <b>${h(fmtLargo(a.entrega))}</b>${venc ? ' · <b>fecha vencida</b>' : ''}</p>
     <div class="fila"><button class="btn small" data-acc="editar">Editar nombre o fecha</button><button class="btn small danger" data-acc="borrar">Eliminar actividad</button></div></div>
   <div class="contadores c4" id="contadores"></div>
@@ -985,11 +1072,11 @@ function vistaTrabajo(v, gid, aid) {
 }
 function filaTrab(s, i, a) {
   const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
-  const tarde = e === 'T' && w.f && w.f > a.entrega;
+  const tarde = !a.diaria && e === 'T' && w.f && w.f > a.entrega;
   const cls = e ? 'w' + e : 'N0';
   const btn = (k, txt) => `<button class="b-est w${k}" data-acc="w${k}" data-s="${h(s.id)}" aria-pressed="${e === k}">${e === k ? '● ' : ''}${txt}</button>`;
   return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
-    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${e && w.f ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
+    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${e && w.f && !a.diaria ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
     <div class="botones">${btn('T', 'Terminó')}${btn('A', 'Avance')}${btn('N', 'Nada')}</div></li>`;
 }
 function pintarTrabajos(a) {
@@ -1011,42 +1098,47 @@ async function marcarTrab(aid, sid, e) {
   if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaTrab(s, n, a); }
   pintarContTrab(a);
 }
-function datosTrabajos(gid, anio, mes, m = 'TEC') {
+function datosTrabajos(gid, ini, fin, m = 'TEC', periodo = '') {
   const g = grupo(gid);
-  const pref = `${anio}-${String(mes + 1).padStart(2, '0')}-`;
-  const acts = actividadesDe(gid, m).filter(a => (a.entrega || '').startsWith(pref)).sort((x, y) => x.entrega.localeCompare(y.entrega) || x.nombre.localeCompare(y.nombre));
-  const ini = ymd(new Date(anio, mes, 1));
+  const acts = actividadesDe(gid, m).filter(a => a.entrega >= ini && a.entrega <= fin)
+    .sort((x, y) => x.entrega.localeCompare(y.entrega) || (y.diaria ? 1 : 0) - (x.diaria ? 1 : 0) || nombreAct(x).localeCompare(nombreAct(y)));
   const alumnos = ordenar(alumnosDe(gid), S.meta.orden || 'reporte').filter(s => {
     const b = bajaVigente(s);
     return !(b && b.desde < ini && !acts.some(a => estTrab(a.id, s.id)));
   });
   const filas = alumnos.map(s => {
     const t = { T: 0, A: 0, N: 0 };
+    let cuenta = 0;
     const celdas = acts.map(a => {
       const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
-      if (e) { t[e]++; const tarde = e === 'T' && w.f && w.f > a.entrega; return { m: TRAB_MARCA[e] + (tarde ? '*' : ''), c: 'w' + e }; }
+      if (e) { t[e]++; cuenta++; const tarde = !a.diaria && e === 'T' && w.f && w.f > a.entrega; return { m: TRAB_MARCA[e] + (tarde ? '*' : ''), c: 'w' + e }; }
       if (bajaEn(s, a.entrega)) return { m: 'B', c: 'b' };
+      cuenta++;
       return { m: '–', c: 'sr' };
     });
-    return { s, celdas, t, baja: bajaVigente(s) };
+    const pct = cuenta ? Math.round((t.T + t.A * 0.5) / cuenta * 100) : null;
+    return { s, celdas, t, pct, n: cuenta, baja: bajaVigente(s) };
   });
-  return { g, m, acts, filas, omitidos: alumnosDe(gid).length - alumnos.length, periodo: `${MESES[mes]} ${anio}` };
+  const proyectos = [...new Set(acts.map(a => a.p).filter(Boolean))];
+  return { g, m, acts, filas, proyectos, omitidos: alumnosDe(gid).length - alumnos.length, periodo };
 }
 function htmlTrabajos(dat) {
   const c = config();
   const { g, acts, filas, periodo } = dat;
   const n = acts.length, esc = g.esc || '202', mat = nombreMateria(dat.m || 'TEC', g.id), cct = escuela(esc).cct;
+  const etiq = a => { const d = aFecha(a.entrega); return `${DIA_LETRA[d.getDay()]} ${d.getDate()}`; };
   return `<section class="rep-pagina rep">
-    <div class="rep-cab"><div><p>${h(nombreEscuelaReporte(esc))}${cct ? ' · C.C.T. ' + h(cct) : ''}</p><h3>Concentrado de trabajos · ${h(g.nombre)} · ${h(mat)}</h3></div><p><b>Entregas de:</b> ${h(periodo)}</p></div>
-    <table class="rep-t"><thead><tr><th colspan="${n + 5}" class="tcab">${h(g.nombre)} · ${h(mat)} · trabajos · ${h(periodo)}</th></tr>
-      <tr><th>No.</th><th style="text-align:left">Alumno</th>${acts.map((a, i) => `<th class="dia" title="${h(a.nombre)}">${i + 1}</th>`).join('')}<th>Termin.</th><th>Avance</th><th>Nada</th></tr></thead>
-    <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.baja ? `<small>Ya no viene desde ${fmtF(r.baja.desde)}</small>` : ''}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.t.T}/${n}</td><td class="tot">${r.t.A}</td><td class="tot">${r.t.N}</td></tr>`).join('') : `<tr><td colspan="${n + 5}">Sin alumnos</td></tr>`}</tbody></table>
-    ${n ? `<p class="rep-ley"><b>Actividades:</b> ${acts.map((a, i) => `<b>${i + 1}</b> = ${h(a.nombre)} (entrega ${fmtF(a.entrega)})`).join(' · ')}</p>` : '<p class="rep-ley"><b>No hay actividades con fecha de entrega en este mes.</b></p>'}
-    <p class="rep-ley">T = terminó · T* = terminó después de la fecha de entrega · AV = avance · N = no hizo nada · – = sin registrar · B = ya no viene.${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
+    <div class="rep-cab"><div><p>${h(nombreEscuelaReporte(esc))}${cct ? ' · C.C.T. ' + h(cct) : ''}</p><h2 class="rep-titulo">EVALUACIÓN CONTINUA</h2><h3>${h(g.nombre)} · ${h(mat)}</h3>${dat.proyectos.length ? `<p><b>Proyecto:</b> ${h(dat.proyectos.join(' · '))}</p>` : ''}</div><p><b>Periodo:</b> ${h(periodo)}</p></div>
+    <table class="rep-t"><thead><tr><th colspan="${n + 6}" class="tcab">Evaluación continua · ${h(g.nombre)} · ${h(mat)} · ${h(periodo)}</th></tr>
+      <tr><th>No.</th><th style="text-align:left">Alumno</th>${acts.map((a, i) => `<th class="dia" title="${h(nombreAct(a))}">${i + 1}<br><small>${etiq(a)}${a.diaria ? '' : '<br>entrega'}</small></th>`).join('')}<th>Termin.</th><th>Avance</th><th>Nada</th><th>Cumpli&shy;miento</th></tr></thead>
+    <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.baja ? `<small>Ya no viene desde ${fmtF(r.baja.desde)}</small>` : ''}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.t.T}</td><td class="tot">${r.t.A}</td><td class="tot">${r.t.N}</td><td class="tot">${r.pct == null ? '—' : r.pct + ' %'}</td></tr>`).join('') : `<tr><td colspan="${n + 6}">Sin alumnos</td></tr>`}</tbody></table>
+    ${n ? `<p class="rep-ley"><b>Actividades:</b> ${acts.map((a, i) => `<b>${i + 1}</b> (${fmtF(a.entrega).slice(0, 5)}) = ${h(nombreAct(a))}${a.diaria ? '' : ' · entrega'}`).join(' · ')}</p>` : '<p class="rep-ley"><b>No hay actividades registradas en este periodo.</b></p>'}
+    <p class="rep-ley">T = terminó · T* = terminó después de la fecha de entrega · AV = avance · N = no hizo nada · – = sin registrar (cuenta como no entregada) · B = ya no viene (no cuenta). Cumplimiento = (T + ½ AV) ÷ actividades del periodo.${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
     <div class="rep-firma"><div>Nombre del docente${c.docente ? `: <b>${h(c.docente)}</b>` : ''}</div><div>Firma</div></div>
   </section>`;
 }
-
+function rangoSemana(f) { const d = aFecha(f), dw = d.getDay() || 7; const lun = sumarDias(f, 1 - dw); return [lun, sumarDias(lun, 6)]; }
+function etiquetaSemana(ini) { const a = aFecha(ini), b = aFecha(sumarDias(ini, 4)); return `Semana del ${a.getDate()}${a.getMonth() !== b.getMonth() ? ' de ' + MESES[a.getMonth()].toLowerCase() : ''} al ${b.getDate()} de ${MESES[b.getMonth()].toLowerCase()} de ${b.getFullYear()}`; }
 /* ---------------- Horario ---------------- */
 const MATERIAS = { TEC: 'Tecnología', ART: 'Artes', TUT: 'Tutoría' };
 const ROMANO = { 1: 'I', 2: 'II', 3: 'III' };
@@ -1232,8 +1324,9 @@ function vistaReporte(v) {
     <div class="fila">
       <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Todos los grupos</option>${gs.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(g.nombre)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1;min-width:140px"><span>Materia</span><select id="r-mat"><option value="*">Todas</option>${(sel.g.startsWith('esc:') || sel.g === '*' ? ORDEN_MAT.filter(m => gs.some(g => materiasDe(g.id).includes(m))) : materiasDe(sel.g)).map(m => `<option value="${m}" ${sel.mat === m ? 'selected' : ''}>${h(sel.g !== '*' && !sel.g.startsWith('esc:') ? nombreMateria(m, sel.g) : MATERIAS[m] || m)}</option>`).join('')}</select></label>
-      <label class="campo" style="flex:1;min-width:140px"><span>Mes</span><select id="r-m">${MESES.map((m, i) => `<option value="${i}" ${sel.mes === i ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
-      <label class="campo" style="width:110px"><span>Año</span><select id="r-a">${anios.map(a => `<option ${sel.anio === a ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
+      ${sel.tipo === 'trab' ? `<label class="campo" style="width:130px"><span>Periodo</span><select id="r-per"><option value="sem" ${sel.per !== 'mes' ? 'selected' : ''}>Semana</option><option value="mes" ${sel.per === 'mes' ? 'selected' : ''}>Mes</option></select></label>` : ''}
+      ${sel.tipo === 'trab' && sel.per !== 'mes' ? `<label class="campo" style="width:180px"><span>Semana del día</span><input type="date" id="r-sem" value="${h(sel.sem || hoy())}"></label>` : `<label class="campo" style="flex:1;min-width:140px"><span>Mes</span><select id="r-m">${MESES.map((m, i) => `<option value="${i}" ${sel.mes === i ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+      <label class="campo" style="width:110px"><span>Año</span><select id="r-a">${anios.map(a => `<option ${sel.anio === a ? 'selected' : ''}>${a}</option>`).join('')}</select></label>`}
     </div>
     ${aviso}
     <div class="fila"><button class="btn primary" id="r-imprimir">Imprimir / Guardar PDF</button><button class="btn" id="r-csv">Descargar CSV</button></div>
@@ -1245,7 +1338,11 @@ function vistaReporte(v) {
   const combos = () => ids().flatMap(id => materiasDe(id).filter(m => sel.mat === '*' || m === sel.mat).map(m => [id, m]));
   const esTrab = () => sel.tipo === 'trab';
   const datos = () => {
-    const l = combos().map(([id, m]) => esTrab() ? datosTrabajos(id, sel.anio, sel.mes, m) : datosConcentrado(id, sel.anio, sel.mes, m));
+    const rango = () => {
+      if (sel.per !== 'mes') { const [i, f] = rangoSemana(sel.sem || hoy()); return [i, f, etiquetaSemana(i)]; }
+      return [ymd(new Date(sel.anio, sel.mes, 1)), ymd(new Date(sel.anio, sel.mes + 1, 0)), `${MESES[sel.mes]} ${sel.anio}`];
+    };
+    const l = combos().map(([id, m]) => esTrab() ? datosTrabajos(id, ...rango().slice(0, 2), m, rango()[2]) : datosConcentrado(id, sel.anio, sel.mes, m));
     const conAlgo = esTrab() ? l.filter(x => x.acts.length) : l;
     return conAlgo.length ? conAlgo : l.slice(0, 1);
   };
@@ -1254,20 +1351,24 @@ function vistaReporte(v) {
   pintar();
   $('#r-g').onchange = e => { sel.g = e.target.value; if (sel.mat !== '*' && !sel.g.startsWith('esc:') && sel.g !== '*' && !materiasDe(sel.g).includes(sel.mat)) sel.mat = '*'; render(); };
   $('#r-mat').onchange = e => { sel.mat = e.target.value; pintar(); };
-  $('#r-m').onchange = e => { sel.mes = Number(e.target.value); pintar(); };
-  $('#r-a').onchange = e => { sel.anio = Number(e.target.value); pintar(); };
+  const on = (id, ev, fn) => { const el = $(id); if (el) el[ev] = fn; };
+  on('#r-m', 'onchange', e => { sel.mes = Number(e.target.value); pintar(); });
+  on('#r-a', 'onchange', e => { sel.anio = Number(e.target.value); pintar(); });
+  on('#r-per', 'onchange', e => { sel.per = e.target.value; render(); });
+  on('#r-sem', 'onchange', e => { if (e.target.value) { sel.sem = e.target.value; pintar(); } });
   $('#r-imprimir').onclick = () => imprimir(datos(), esTrab() ? htmlTrabajos : htmlConcentrado, esTrab() ? 'acts' : 'fechas');
   $('#r-csv').onclick = () => {
     const filas = [];
     if (esTrab()) {
       datos().forEach(dat => {
-        filas.push([`${nombreGrupoL(dat.g.id)} · ${nombreMateria(dat.m, dat.g.id)} — trabajos con entrega en ${dat.periodo}`]);
-        filas.push(['No.', 'ID', 'Alumno', ...dat.acts.map(a => `${a.nombre} (${fmtF(a.entrega)})`), 'Terminados', 'Avances', 'No hizo nada', 'Ya no viene desde']);
-        dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.t.T, r.t.A, r.t.N, r.baja ? fmtF(r.baja.desde) : '']));
+        filas.push(['EVALUACIÓN CONTINUA']);
+        filas.push([`${nombreEscuelaReporte(dat.g.esc || '202')} · ${dat.g.nombre} · ${nombreMateria(dat.m, dat.g.id)} · ${dat.periodo}${dat.proyectos.length ? ' · Proyecto: ' + dat.proyectos.join(' / ') : ''}`]);
+        filas.push(['No.', 'ID', 'Alumno', ...dat.acts.map(a => `${fmtF(a.entrega)} ${nombreAct(a)}`), 'Terminó', 'Avance', 'No hizo nada', 'Cumplimiento %', 'Ya no viene desde']);
+        dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.t.T, r.t.A, r.t.N, r.pct == null ? '' : r.pct, r.baja ? fmtF(r.baja.desde) : '']));
         filas.push([]);
       });
-      filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene']);
-      descargar(`trabajos_${escuela(sel.esc).corto.replace(/\s/g, '')}_${sel.g === '*' ? 'todos' : sel.g}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+      filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene; Cumplimiento = (T + ½ AV) / actividades del periodo']);
+      descargar(`evaluacion_continua_${escuela(sel.esc).corto.replace(/\s/g, '')}_${sel.g === '*' ? 'todos' : sel.g}${sel.mat === '*' ? '' : '_' + sel.mat}_${sel.per !== 'mes' ? 'semana_' + rangoSemana(sel.sem || hoy())[0] : MESES[sel.mes] + '_' + sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
       return;
     }
     datos().forEach(dat => {
@@ -1501,7 +1602,7 @@ function exportarTrabajosCSV() {
   const filas = [['Escuela', 'Grupo', 'Materia', 'Actividad', 'Fecha de entrega', 'ID alumno', 'Alumno', 'Estado', 'Fecha en que se marcó', 'Entrega tardía']];
   vivos('w').filter(w => w.d.e).map(w => w.d).sort((a, b) => (a.g + a.a).localeCompare(b.g + b.a)).forEach(w => {
     const a = actividad(w.a), s = alumno(w.s), g = grupo(w.g); if (!a) return;
-    filas.push([escuela(escDe(w.g)).corto, g ? g.nombre : w.g, nombreMateria(matDe(a), w.g), a.nombre, a.entrega, w.s, s ? nombreCompleto(s) : '(eliminado)', TRAB_TXT[w.e], w.f || '', w.e === 'T' && w.f > a.entrega ? 'Sí' : '']);
+    filas.push([escuela(escDe(w.g)).corto, g ? g.nombre : w.g, nombreMateria(matDe(a), w.g), nombreAct(a) + (a.diaria ? ' (diaria)' : ''), a.entrega, w.s, s ? nombreCompleto(s) : '(eliminado)', TRAB_TXT[w.e], w.f || '', w.e === 'T' && w.f > a.entrega ? 'Sí' : '']);
   });
   descargar(`trabajos_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
 }
@@ -1609,7 +1710,7 @@ async function iniciar() {
   window.addEventListener('hashchange', alCambiarRuta);
   window.addEventListener('online', () => { pintarEstado(); sincronizar(false); });
   window.addEventListener('offline', pintarEstado);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.fechaLista < hoy() && S.vistaActual !== 'lista') S.fechaLista = hoy(); sincronizar(false); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.fechaLista < hoy() && S.vistaActual !== 'lista') S.fechaLista = hoy(); if (S.fechaTrab && S.fechaTrab < hoy() && S.vistaActual !== 'trabajos') S.fechaTrab = hoy(); sincronizar(false); } });
   document.addEventListener('focusout', () => { setTimeout(() => { if (S.pendienteRender && !(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) { S.pendienteRender = false; refrescarSiConviene(); } }, 200); });
   setInterval(() => { if (document.visibilityState === 'visible') sincronizar(false); }, 90000);
   setInterval(() => {
