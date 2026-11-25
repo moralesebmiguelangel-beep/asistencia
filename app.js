@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.3.2';
+const APP_VERSION = '2.4.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -223,16 +223,20 @@ function toast(msg, opc = {}) {
 function dialogo({ titulo, html, ok = 'Aceptar', cancelar = 'Cancelar', peligro = false, alAbrir }) {
   return new Promise(res => {
     const d = $('#dlg');
-    $('#dlg-titulo').textContent = titulo;
-    $('#dlg-cuerpo').innerHTML = html || '';
-    $('#dlg-ok').textContent = ok;
-    $('#dlg-ok').className = 'btn ' + (peligro ? 'danger' : 'primary');
-    $('#dlg-cancelar').textContent = cancelar;
-    $('#dlg-cancelar').hidden = cancelar === null;
-    d.returnValue = '';
-    d.onclose = () => res(d.returnValue === 'ok' ? ($('#dlg-cuerpo')) : null);
-    d.showModal();
-    alAbrir && alAbrir($('#dlg-cuerpo'));
+    const abrir = () => {
+      $('#dlg-titulo').textContent = titulo;
+      $('#dlg-cuerpo').innerHTML = html || '';
+      $('#dlg-ok').textContent = ok;
+      $('#dlg-ok').className = 'btn ' + (peligro ? 'danger' : 'primary');
+      $('#dlg-cancelar').textContent = cancelar;
+      $('#dlg-cancelar').hidden = cancelar === null;
+      d.returnValue = '';
+      d.onclose = () => res(d.returnValue === 'ok' ? ($('#dlg-cuerpo')) : null);
+      d.showModal();
+      alAbrir && alAbrir($('#dlg-cuerpo'));
+    };
+    // Si hay otro diálogo abierto, se cierra y se espera su evento «close» antes de abrir el nuevo
+    if (d.open) { d.close('cancel'); setTimeout(abrir, 0); } else abrir();
   });
 }
 async function confirmar(titulo, texto, ok = 'Sí, continuar', peligro = true) {
@@ -413,6 +417,7 @@ function vistaLista(v, gid, mArg) {
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
     const acc = b.dataset.acc;
+    if (acc === 'foto') { abrirFoto(b.dataset.s); return; }
     if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaLista = diaDeClaseVecino(gid, S.fechaLista, acc === 'dia-sig' ? 1 : -1, m); render(); }
     else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
     else if (acc === 'todos') marcarTodos(gid);
@@ -459,7 +464,7 @@ function filaAlumno(s, i, f, m = S.mat || 'TEC') {
   const cls = e || 'N';
   const dis = listaBloqueada(s.g, f, m) ? ' disabled' : '';
   return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
-    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${cls}">${e === 'A' ? '✓ ' : e === 'F' ? '✗ ' : ''}${ESTADO_TXT[e]}</span></div>
+    <div class="nom">${avatar(s)}<span class="nom-t"><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${cls}">${e === 'A' ? '✓ ' : e === 'F' ? '✗ ' : ''}${ESTADO_TXT[e]}</span></div>
     <div class="botones">
       <button class="b-est A" data-acc="A" data-s="${h(s.id)}" aria-pressed="${e === 'A'}"${dis}>${e === 'A' ? '✓ ' : ''}Asistencia</button>
       <button class="b-est F" data-acc="F" data-s="${h(s.id)}" aria-pressed="${e === 'F'}"${dis}>${e === 'F' ? '✗ ' : ''}Falta</button>
@@ -529,6 +534,71 @@ async function darDeBaja(sid) {
   render();
 }
 
+/* ---------------- Fotos de alumnos ---------------- */
+function fotoDe(sid) { const it = S.items.get('p:' + sid); return it && !it.del && it.d && it.d.img ? it.d.img : ''; }
+function verFotos() { return S.meta.verFotos !== false; }
+function iniciales(s) {
+  if (s.n && s.ap) return (s.n.trim()[0] || '') + (s.ap.trim()[0] || '');
+  const p = nombreCompleto(s).split(/\s+/).filter(Boolean); return ((p[2] || p[p.length - 1] || '')[0] || '') + ((p[0] || '')[0] || '');
+}
+function avatar(s) {
+  if (!verFotos()) return '';
+  const img = fotoDe(s.id);
+  return `<button type="button" class="avatar${img ? ' con' : ''}" data-acc="foto" data-s="${h(s.id)}" aria-label="${img ? 'Ver foto de' : 'Agregar foto de'} ${h(nombreCompleto(s))}">${img ? `<img src="${img}" alt="">` : `<span>${h(iniciales(s))}</span>`}</button>`;
+}
+let entradaFoto = null, fotoPara = null;
+function pedirArchivoFoto(sid) {
+  fotoPara = sid;
+  if (!entradaFoto) {
+    entradaFoto = document.createElement('input');
+    entradaFoto.type = 'file'; entradaFoto.accept = 'image/*'; entradaFoto.hidden = true;
+    document.body.appendChild(entradaFoto);
+    entradaFoto.onchange = async () => {
+      const file = entradaFoto.files[0], sid2 = fotoPara; entradaFoto.value = '';
+      if (!file || !sid2) return;
+      try {
+        const img = await reducirFoto(file);
+        await guardar([{ t: 'p', id: sid2, d: { s: sid2, img } }]);
+        toast('Foto guardada.'); refrescarFilaFoto(sid2);
+      } catch (e) { toast('No se pudo usar esa imagen: ' + (e.message || e), { ms: 7000 }); }
+    };
+  }
+  entradaFoto.click();   // debe llamarse durante el toque del usuario
+}
+async function reducirFoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('formato no compatible')); i.src = url; });
+    const lado = Math.min(im.naturalWidth, im.naturalHeight); if (!lado) throw new Error('imagen vacía');
+    const sx = (im.naturalWidth - lado) / 2, sy = Math.max(0, (im.naturalHeight - lado) / 2 - lado * 0.08);   // recorte cuadrado, un poco hacia arriba (cara)
+    const c = document.createElement('canvas'); c.width = c.height = 192;
+    const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(im, sx, sy, lado, lado, 0, 0, 192, 192);
+    let q = 0.75, data = c.toDataURL('image/jpeg', q);
+    while (data.length > 38000 && q > 0.3) { q -= 0.1; data = c.toDataURL('image/jpeg', q); }
+    return data;
+  } finally { URL.revokeObjectURL(url); }
+}
+function refrescarFilaFoto(sid) {
+  document.querySelectorAll(`.avatar[data-s="${CSS.escape(sid)}"]`).forEach(b => { const s = alumno(sid); if (s) b.outerHTML = avatar(s); });
+}
+function abrirFoto(sid) {
+  const s = alumno(sid); if (!s) return;
+  const img = fotoDe(sid);
+  if (!img) { pedirArchivoFoto(sid); return; }
+  dialogo({
+    titulo: nombreCompleto(s), ok: 'Cerrar', cancelar: null,
+    html: `<img src="${img}" alt="Foto de ${h(nombreCompleto(s))}" class="foto-grande">
+      <div class="fila" style="justify-content:center;margin-top:.6rem"><button type="button" class="btn" id="foto-cambiar">📷 Cambiar foto</button><button type="button" class="btn danger" id="foto-quitar">Quitar foto</button></div>`,
+    alAbrir: cuerpo => {
+      cuerpo.querySelector('#foto-cambiar').onclick = () => { $('#dlg').close('cancel'); pedirArchivoFoto(sid); };
+      cuerpo.querySelector('#foto-quitar').onclick = async () => {
+        if (!await confirmar('Quitar foto', `¿Quitar la foto de ${nombreCompleto(s)}?`, 'Quitar')) return;
+        await guardar([{ t: 'p', id: sid, d: { s: sid }, del: true }]); toast('Foto quitada.'); refrescarFilaFoto(sid);
+      };
+    }
+  });
+}
+
 /* ---------------- Vista: administración de un grupo ---------------- */
 function vistaGrupo(v, gid) {
   const g = grupo(gid);
@@ -580,6 +650,7 @@ function vistaGrupo(v, gid) {
       const cambios = [{ t: 's', id: s.id, d: s, del: true }];
       vivos('r').filter(r => r.d.s === s.id).forEach(r => cambios.push({ t: 'r', id: r.id, d: r.d, del: true }));
       vivos('w').filter(w => w.d.s === s.id).forEach(w => cambios.push({ t: 'w', id: w.id, d: w.d, del: true }));
+      if (fotoDe(s.id)) cambios.push({ t: 'p', id: s.id, d: { s: s.id }, del: true });
       await guardar(cambios); toast('Alumno eliminado.'); render();
     } else if (acc === 'agregar') {
       const nom = $('#nuevo-nombre').value.trim(); if (!nom) return;
@@ -601,7 +672,7 @@ function vistaGrupo(v, gid) {
     } else if (acc === 'borrar-grupo') {
       if (!await confirmar('Eliminar grupo', `Se eliminará ${g.nombre}, sus ${alumnosDe(gid).length} alumnos y todos sus registros. Esta acción no se puede deshacer salvo con un respaldo. ¿Eliminar?`, 'Eliminar grupo')) return;
       const cambios = [{ t: 'g', id: gid, d: g, del: true }];
-      alumnosDe(gid).forEach(s => cambios.push({ t: 's', id: s.id, d: s, del: true }));
+      alumnosDe(gid).forEach(s => { cambios.push({ t: 's', id: s.id, d: s, del: true }); if (fotoDe(s.id)) cambios.push({ t: 'p', id: s.id, d: { s: s.id }, del: true }); });
       vivos('r').filter(r => r.d.g === gid).forEach(r => cambios.push({ t: 'r', id: r.id, d: r.d, del: true }));
       vivos('a').filter(a => a.d.g === gid).forEach(a => cambios.push({ t: 'a', id: a.id, d: a.d, del: true }));
       vivos('w').filter(w => w.d.g === gid).forEach(w => cambios.push({ t: 'w', id: w.id, d: w.d, del: true }));
@@ -1000,6 +1071,7 @@ function vistaTrabajos(v, gid, mArg) {
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
     const acc = b.dataset.acc;
+    if (acc === 'foto') { abrirFoto(b.dataset.s); return; }
     if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaTrab = diaDeClaseVecino(gid, S.fechaTrab, acc === 'dia-sig' ? 1 : -1, m); render(); }
     else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
     else if (acc === 'wT' || acc === 'wA' || acc === 'wN') marcarTrabDia(gid, m, f, [b.dataset.s], acc.slice(1));
@@ -1063,6 +1135,7 @@ function vistaTrabajo(v, gid, aid) {
   v.onclick = async ev => {
     const b = ev.target.closest('[data-acc]'); if (!b) return;
     const acc = b.dataset.acc;
+    if (acc === 'foto') { abrirFoto(b.dataset.s); return; }
     if (acc === 'wT' || acc === 'wA' || acc === 'wN') marcarTrab(aid, b.dataset.s, acc.slice(1));
     else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
     else if (acc === 'editar') { if (await dialogoActividad(gid, actividad(aid))) render(); }
@@ -1080,7 +1153,7 @@ function filaTrab(s, i, a) {
   const cls = e ? 'w' + e : 'N0';
   const btn = (k, txt) => `<button class="b-est w${k}${ef.auto && k === 'N' ? ' auto' : ''}" data-acc="w${k}" data-s="${h(s.id)}" aria-pressed="${e === k}">${e === k ? '● ' : ''}${txt}</button>`;
   return `<li class="alumno st-${cls}${ef.auto ? ' falto' : ''}" id="al-${h(s.id)}">
-    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${ef.auto ? ' · faltó' : ''}${e && w && w.f && !a.diaria ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
+    <div class="nom">${avatar(s)}<span class="nom-t"><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${ef.auto ? ' · faltó' : ''}${e && w && w.f && !a.diaria ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
     <div class="botones">${btn('T', 'Terminó')}${btn('A', 'Avance')}${btn('N', 'Nada')}</div></li>`;
 }
 function pintarTrabajos(a) {
@@ -1406,6 +1479,7 @@ function describir(k, val) {
   if (k.startsWith('g:')) return `${d.nombre} · días: ${(d.dias || []).map(x => DIAS[x].slice(0, 3)).join(', ') || 'ninguno'}`;
   if (k.startsWith('w:')) return TRAB_TXT[d.e || ''];
   if (k.startsWith('a:')) return `${d.nombre} · entrega ${fmtF(d.entrega)}`;
+  if (k.startsWith('p:')) return val.del || !(val.d && val.d.img) ? 'Sin foto' : 'Con foto';
   if (/^c:horario/.test(k)) return `${Object.keys(d.clases || {}).length} clases por semana`;
   return 'Configuración general';
 }
@@ -1413,6 +1487,7 @@ function tituloConflicto(c) {
   const d = (c.local && c.local.d) || (c.remote && c.remote.d) || {};
   if (c.k.startsWith('r:')) { const s = alumno(d.s); const g = grupo(d.g); return `${g ? nombreGrupoL(d.g) + ' · ' : ''}${nombreMateria(matDe(d), d.g)} · ${s ? nombreCompleto(s) : d.s} · ${fmtLargo(d.f)}`; }
   if (/^c:horario/.test(c.k)) return 'Horario de clases';
+  if (c.k.startsWith('p:')) { const s = alumno(c.k.slice(2)); return 'Foto de ' + (s ? nombreCompleto(s) : 'alumno'); }
   if (c.k.startsWith('s:')) return 'Datos del alumno ' + nombreCompleto(d);
   if (c.k.startsWith('g:')) return 'Datos del grupo ' + (d.nombre || '');
   if (c.k.startsWith('w:')) { const s = alumno(d.s), a = actividad(d.a); return `Trabajo «${a ? a.nombre : ''}» · ${s ? nombreCompleto(s) : d.s}`; }
@@ -1664,6 +1739,10 @@ function vistaConfig(v) {
     <button class="btn" id="csv-todo">Exportar todos los registros (CSV)</button>
     <button class="btn" id="csv-trab">Exportar todos los trabajos (CSV)</button></div>
   </div>
+  <div class="card"><h2>Fotos de alumnos</h2>
+    <label class="fila"><input type="checkbox" id="ver-fotos" ${verFotos() ? 'checked' : ''} style="width:22px;height:22px"> Mostrar fotos en las listas (en este dispositivo)</label>
+    <p class="tenue">Toca el círculo junto al nombre de un alumno para tomarle foto o elegirla de tu galería. Las fotos se guardan pequeñas, solo en tus dispositivos, tu respaldo y tu Hoja de Google privada, y no aparecen en reportes. ${vivos('p').filter(x => x.d && x.d.img).length} alumno(s) con foto.</p>
+  </div>
   <div class="card"><h2>Este dispositivo</h2>
     <p class="tenue">Versión ${APP_VERSION} · ID del dispositivo: ${h(S.meta.deviceId)} · <span id="almac"></span></p>
   </div>`;
@@ -1702,6 +1781,7 @@ function vistaConfig(v) {
     try { if (await restaurarRespaldo(f)) { toast('Respaldo restaurado.'); render(); } } catch (err) { toast(err.message, { ms: 8000 }); }
   };
   on('csv-todo', exportarRegistrosCSV);
+  const vf = $('#ver-fotos'); if (vf) vf.onchange = async () => { await setMeta('verFotos', vf.checked); toast(vf.checked ? 'Fotos visibles.' : 'Fotos ocultas.'); };
   on('csv-trab', exportarTrabajosCSV);
 }
 
