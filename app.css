@@ -208,3 +208,22 @@ button.h-fila:hover{border-color:#b9a6cf}
 .sub-esc{display:inline-block;font-size:.75rem;font-weight:600;color:var(--tenue);border:1px solid var(--borde);padding:.05rem .4rem;border-radius:6px;vertical-align:middle;margin-left:.3rem}
 .h-esc{margin:.9rem 0 .4rem;font-size:1rem;color:#5b2a86}
 label.chk{display:inline-flex;align-items:center;gap:.3rem;border:2px solid var(--borde);border-radius:8px;padding:.3rem .6rem;min-height:40px;background:#fff}
+/* Inicio: elegir escuela */
+.escuelas{display:grid;grid-template-columns:1fr;gap:.9rem}
+@media(min-width:700px){.escuelas{grid-template-columns:1fr 1fr}}
+.esc-btn{display:flex;flex-direction:column;gap:.25rem;padding:1.1rem 1.2rem;border-radius:16px;border:3px solid var(--borde);background:#fff;color:var(--texto);text-decoration:none;min-height:150px;justify-content:center}
+.esc-btn .esc-num{font-size:.85rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.esc-btn strong{font-size:1.45rem;line-height:1.2}
+.esc-btn small{color:var(--tenue);font-size:.9rem}
+.esc-btn span:not(.esc-num){font-size:.95rem}
+.esc-btn .ahora-e{font-weight:700}
+.esc-202{border-color:#1f4e79}.esc-202 .esc-num,.esc-202 strong{color:#1f4e79}
+.esc-184{border-color:#0f766e}.esc-184 .esc-num,.esc-184 strong{color:#0f766e}
+.esc-btn.destacada{box-shadow:0 0 0 4px #fde68a}
+.esc-btn.destacada::after{content:"Te toca aquí";align-self:flex-start;margin-top:.3rem;font-size:.75rem;font-weight:800;background:#fde68a;color:#7c4a03;border-radius:999px;padding:.1rem .6rem}
+/* Barra de la escuela actual */
+.barra-esc{display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.35rem .9rem;font-size:.88rem;color:#fff;flex-wrap:wrap}
+.barra-esc.esc-202{background:#2b6299}
+.barra-esc.esc-184{background:#0f766e}
+.barra-esc .btn{background:#fff;color:var(--texto);border-color:#fff;min-height:34px}
+.h-otra{margin-top:.6rem;padding:.5rem .6rem;border-radius:8px;background:#fff7d6;border:1px solid #e3c26b;font-size:.92rem}

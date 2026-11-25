@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -269,15 +269,35 @@ function alCambiarRuta() {
   rutaPrevia = r;
   render();
 }
+function escActual() { const e = S.meta.escuela; return e && escuelas().some(x => x.id === e) ? e : null; }
+function fijarEscuela(esc) { if (esc && S.meta.escuela !== esc) setMeta('escuela', esc); }
+function gruposEsc(esc = escActual() || '202') { return grupos().filter(g => (g.esc || '202') === esc); }
+function pintarBarraEscuela(r) {
+  let bar = $('#barra-esc');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'barra-esc'; $('header.top').after(bar); }
+  const esc = escActual();
+  if (!esc || r.vista === '' || r.vista === 'inicio' || !grupos().length) { bar.hidden = true; return; }
+  const e = escuela(esc);
+  bar.hidden = false;
+  bar.className = 'barra-esc esc-' + esc;
+  bar.innerHTML = `<span>🏫 <b>${h(e.corto)}</b> · ${h(e.nombre.replace(/^Escuela Secundaria Técnica No\. \d+\s*/, '').replace(/[“”"]/g, ''))}</span><a href="#/" class="btn small">Cambiar escuela</a>`;
+}
 function render() {
   const r = ruta();
   S.vistaActual = r.vista;
-  $$('nav.bottom a').forEach(a => a.classList.toggle('activo', (a.dataset.nav === (r.vista || 'grupos')) || (a.dataset.nav === 'config' && ['importar', 'grupo', 'conflictos'].includes(r.vista)) || (a.dataset.nav === 'lista' && ['trabajos', 'trabajo'].includes(r.vista))));
+  // Las vistas de un grupo fijan la escuela de ese grupo
+  if (['lista', 'trabajos', 'trabajo', 'grupo'].includes(r.vista) && r.args[0] && grupo(r.args[0])) fijarEscuela(escDe(r.args[0]));
+  if (r.vista === 'e' && r.args[0]) fijarEscuela(r.args[0]);
+  const ng = $('nav a[data-nav=grupos]'); if (ng) ng.href = escActual() ? '#/e/' + escActual() : '#/';
+  $$('nav.bottom a').forEach(a => a.classList.toggle('activo', (a.dataset.nav === 'grupos' && ['', 'e', 'grupos', 'inicio'].includes(r.vista)) || a.dataset.nav === r.vista || (a.dataset.nav === 'config' && ['importar', 'grupo', 'conflictos'].includes(r.vista)) || (a.dataset.nav === 'lista' && ['trabajos', 'trabajo'].includes(r.vista))));
+  pintarBarraEscuela(r);
   const v = $('#vista');
   v.onclick = null;
   try {
     switch (r.vista) {
-      case '': case 'grupos': vistaGrupos(v); break;
+      case '': case 'inicio': vistaInicio(v); break;
+      case 'e': vistaGrupos(v); break;
+      case 'grupos': if (escActual()) vistaGrupos(v); else vistaInicio(v); break;
       case 'lista': vistaLista(v, r.args[0], r.args[1]); break;
       case 'reporte': vistaReporte(v); break;
       case 'config': vistaConfig(v); break;
@@ -287,24 +307,49 @@ function render() {
       case 'trabajo': vistaTrabajo(v, r.args[0], r.args[1]); break;
       case 'conflictos': vistaConflictos(v); break;
       case 'horario': vistaHorario(v); break;
-      default: vistaGrupos(v);
+      default: vistaInicio(v);
     }
   } catch (e) { console.error(e); v.innerHTML = `<div class="error">Ocurrió un error al mostrar esta pantalla: ${h(e.message)}</div>`; }
   pintarEstado();
 }
-
 /* ---------------- Vista: Grupos ---------------- */
-function vistaGrupos(v) {
+function vistaInicio(v) {
   $('#titulo').textContent = 'Asistencia';
-  const gs = grupos();
-  if (!gs.length) {
+  if (!grupos().length) {
     v.innerHTML = `<div class="card"><h2>Bienvenido</h2>
       <p>Aún no hay grupos en este dispositivo.</p>
       <p><a class="btn primary" href="#/importar">Importar mi archivo «reporte»</a></p>
       <p class="tenue">¿Ya los importaste en otro dispositivo? Ve a <a href="#/config">Configuración → Sincronización</a> y vincula este dispositivo para descargarlos.</p></div>`;
     return;
   }
-  const f = hoy(), sc = sinClaseSet(), d = aFecha(f).getDay(), escs = escuelasEnUso();
+  const ahora = new Date(), d = ahora.getDay(), mm = ahora.getHours() * 60 + ahora.getMinutes(), f = hoy();
+  const ses = d >= 1 && d <= 5 && !sinClaseSet().has(f) ? sesionesDelDia(d) : [];
+  const actual = ses.find(o => mm >= aMin(o.ini) && mm < aMin(o.fin)), sig = ses.find(o => aMin(o.ini) > mm && o !== actual);
+  const destacada = (actual || sig || {}).esc;
+  v.innerHTML = `<p class="tenue" style="margin-top:0">${h(fmtLargo(f))}</p><p style="margin:.2rem 0 .7rem">¿En qué escuela vas a trabajar?</p>
+  <div class="escuelas">${escuelas().map(e => {
+    const gs = gruposEsc(e.id), nAl = gs.reduce((t, g) => t + alumnosDe(g.id).filter(s => activoEn(s, f)).length, 0);
+    const mias = ses.filter(o => o.esc === e.id), act = mias.find(o => o === actual), prox = mias.find(o => aMin(o.ini) > mm && o !== act);
+    let linea = '';
+    if (act) linea = `<span class="ahora-e">● Ahora: ${h(nombreMateria(act.c.m, act.c.g))} · ${h(nombreGrupoH(act.c.g))}</span>`;
+    if (prox) linea += `<span>Siguiente: ${h(nombreMateria(prox.c.m, prox.c.g))} · ${h(nombreGrupoH(prox.c.g))} a las ${prox.ini}</span>`;
+    if (!linea) linea = `<span>${mias.length ? 'Ya terminaron tus clases de hoy' : 'Hoy no tienes clases aquí'}</span>`;
+    const nombre = e.nombre.replace(/^Escuela Secundaria Técnica No\. \d+\s*/, '').replace(/[“”"]/g, '');
+    return `<a class="esc-btn esc-${h(e.id)} ${e.id === destacada ? 'destacada' : ''}" href="#/e/${h(e.id)}" data-esc="${h(e.id)}">
+      <span class="esc-num">${h(e.corto)}</span><strong>${h(nombre)}</strong>
+      <small>${gs.length ? `${gs.length} grupo(s) · ${nAl} alumnos` : 'Sin alumnos todavía'}</small>${linea}</a>`;
+  }).join('')}</div>`;
+}
+function vistaGrupos(v) {
+  const esc = escActual() || '202';
+  $('#titulo').textContent = escuela(esc).corto;
+  const gs = gruposEsc(esc);
+  if (!gs.length) {
+    v.innerHTML = `<div class="card"><h2>${h(escuela(esc).nombre)}</h2><p>Aún no hay grupos de esta escuela.</p>
+      <p><a class="btn primary" href="#/importar">Importar la lista de alumnos</a></p></div>`;
+    return;
+  }
+  const f = hoy(), sc = sinClaseSet(), d = aFecha(f).getDay();
   const boton = g => {
     const act = alumnosDe(g.id).filter(s => activoEn(s, f));
     const hoyM = [...new Set(clasesDelDia(g.id, d).map(c => c.m))].filter(m => esDiaDeClase(g.id, f, sc, m));
@@ -315,23 +360,21 @@ function vistaGrupos(v) {
     const mats = materiasDe(g.id).map(m => nombreMateria(m, g.id)).join(' · ');
     return `<a class="grupo-btn" href="#/lista/${encodeURIComponent(g.id)}${hoyM.length ? '/' + hoyM[0] : ''}"><strong>${h(g.nombre)}</strong>${lineas || '<small>Hoy sin clase</small>'}<small>${act.length} alumnos · ${h(mats)}</small></a>`;
   };
-  v.innerHTML = `<p class="tenue" style="margin-top:0">${h(fmtLargo(f))}</p>` + escs.map(e => {
-    const lista = gs.filter(g => (g.esc || '202') === e.id);
-    return `${escs.length > 1 ? `<h2 class="esc-tit">${h(e.corto)}</h2>` : ''}<div class="grupos">${lista.map(boton).join('')}</div>`;
-  }).join('');
+  v.innerHTML = `<p class="tenue" style="margin-top:0">${h(fmtLargo(f))}</p><div class="grupos">${gs.map(boton).join('')}</div>`;
 }
 /* ---------------- Vista: Pasar lista ---------------- */
 function vistaLista(v, gid, mArg) {
   if (!gid) {
-    const ult = S.meta.ultimoGrupo;
-    if (ult && grupo(ult)) { location.replace('#/lista/' + encodeURIComponent(ult)); return; }
+    if (!escActual() && escuelasEnUso().length > 1) { vistaInicio(v); return; }
+    const esc = escActual() || '202', ult = S.meta['ultimoGrupo_' + esc] || (esc === '202' ? S.meta.ultimoGrupo : null);
+    if (ult && grupo(ult) && escDe(ult) === esc) { location.replace('#/lista/' + encodeURIComponent(ult)); return; }
     $('#titulo').textContent = 'Pasar lista';
     v.innerHTML = '<p>Elige un grupo:</p>';
-    const d = document.createElement('div'); v.appendChild(d); vistaGrupos(d); return;
+    const d = document.createElement('div'); v.appendChild(d); vistaGrupos(d); $('#titulo').textContent = 'Pasar lista'; return;
   }
   const g = grupo(gid);
   if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
-  if (S.meta.ultimoGrupo !== gid) setMeta('ultimoGrupo', gid);
+  if (S.meta['ultimoGrupo_' + escDe(gid)] !== gid) setMeta('ultimoGrupo_' + escDe(gid), gid);
   const f = S.fechaLista;
   const mats = materiasDe(gid);
   const m = mats.includes(mArg) ? mArg : (materiaDeHoy(gid, f) && mats.includes(materiaDeHoy(gid, f)) ? materiaDeHoy(gid, f) : (mats[0] || 'TEC'));
@@ -346,7 +389,7 @@ function vistaLista(v, gid, mArg) {
   v.innerHTML = `${tabsGrupo(gid, 'l')}
   ${mats.length > 1 ? `<div class="mats" role="tablist">${mats.map(x => `<a role="tab" href="#/lista/${encodeURIComponent(gid)}/${x}" class="mat-${x} ${x === m ? 'activo' : ''}" aria-selected="${x === m}">${h(nombreMateria(x, gid))}</a>`).join('')}</div>` : ''}
   <div class="cab-lista">
-    <h2>${h(g.nombre)} <span class="sub-mat mat-${m}">${h(nm)}</span>${escuelasEnUso().length > 1 ? `<span class="sub-esc">${h(escuela(escDe(gid)).corto)}</span>` : ''}</h2>
+    <h2>${h(g.nombre)} <span class="sub-mat mat-${m}">${h(nm)}</span></h2>
     <div class="fecha-sel">
       <button class="btn" data-acc="dia-ant" aria-label="Día de clase anterior">◀</button>
       <input type="date" id="fecha" value="${f}" aria-label="Fecha de la lista">
@@ -562,7 +605,7 @@ function vistaGrupo(v, gid) {
       vivos('r').filter(r => r.d.g === gid).forEach(r => cambios.push({ t: 'r', id: r.id, d: r.d, del: true }));
       vivos('a').filter(a => a.d.g === gid).forEach(a => cambios.push({ t: 'a', id: a.id, d: a.d, del: true }));
       vivos('w').filter(w => w.d.g === gid).forEach(w => cambios.push({ t: 'w', id: w.id, d: w.d, del: true }));
-      await guardar(cambios); toast('Grupo eliminado.'); location.hash = '#/';
+      await guardar(cambios); toast('Grupo eliminado.'); location.hash = '#/e/' + escDe(gid);
     }
   };
 }
@@ -682,7 +725,7 @@ function mapeoAutomatico(enc) {
 function escuelaDelArchivo(hojas) {
   const txt = hojas.slice(0, 3).map(hj => hj.filas.slice(0, 15).map(f => (f || []).join(' ')).join(' ')).join(' ').toUpperCase();
   const e = escuelas().find(x => new RegExp('(NO\\.?|N°|NÚM\\.?|NUM\\.?)\\s*' + x.id + '\\b').test(txt) || (x.cct && txt.includes(x.cct)));
-  return e ? e.id : '202';
+  return e ? e.id : (escActual() || '202');
 }
 function hojaEsDeGrupo(nombre) { return /\d/.test(nombre) && /^[^A-Za-zÁÉÍÓÚÑáéíóúñ]*\d+\D{0,4}[A-Za-zÑñ]\s*$/.test(String(nombre).trim()); }
 function grupoDesde(texto) {
@@ -836,7 +879,7 @@ function vistaImportar(v) {
     const c = await aplicarImportacion(prep);
     S.importacion = null;
     toast(`Importación lista: ${n} alumnos procesados (${c.filter(x => x.t === 'g').length} grupos nuevos).`, { ms: 6000 });
-    location.hash = '#/';
+    await setMeta('escuela', st.esc); location.hash = '#/e/' + st.esc;
   };
 }
 
@@ -885,7 +928,7 @@ async function dialogoActividad(gid, a) {
 function vistaTrabajos(v, gid) {
   const g = grupo(gid);
   if (!g) { v.innerHTML = '<div class="error">Ese grupo no existe.</div>'; return; }
-  if (S.meta.ultimoGrupo !== gid) setMeta('ultimoGrupo', gid);
+  if (S.meta['ultimoGrupo_' + escDe(gid)] !== gid) setMeta('ultimoGrupo_' + escDe(gid), gid);
   $('#titulo').textContent = 'Trabajos · ' + g.nombre;
   const acts = actividadesDe(gid), f = hoy();
   v.innerHTML = `${tabsGrupo(gid, 't')}
@@ -1041,20 +1084,26 @@ function sesionesDelDia(d) {   // todas las clases del día, de todas las escuel
 }
 function tarjetaAhora(_hz, ahora) {
   const d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
-  const txt = o => `${h(nombreMateria(o.c.m, o.c.g))} · ${h(nombreGrupoL(o.c.g))}`;
+  const escA = escActual() || '202';
+  const txt = o => `${h(nombreMateria(o.c.m, o.c.g))} · ${h(nombreGrupoH(o.c.g))}`;
   if (d < 1 || d > 5) return `<div class="h-et">Hoy</div><div class="h-cl">Sin clases</div><div class="h-hr">Es fin de semana.</div>`;
   const motivo = sinClaseSet().get(ymd(ahora));
   let html = motivo ? `<div class="aviso" style="margin:0 0 .5rem">Hoy: <b>${h(motivo)}</b> (según tu calendario escolar).</div>` : '';
-  const ses = sesionesDelDia(d);
-  if (!ses.length) return html + `<div class="h-et">Hoy</div><div class="h-cl">Sin clases</div>`;
+  const todas = sesionesDelDia(d), ses = todas.filter(o => o.esc === escA);
+  const otraAct = todas.find(o => o.esc !== escA && m >= aMin(o.ini) && m < aMin(o.fin));
+  const otraProx = todas.find(o => o.esc !== escA && aMin(o.ini) > m);
+  const aviso = o => `<div class="h-otra">📍 ${o === otraAct ? 'Ahora' : 'A las ' + o.ini} tienes ${h(nombreMateria(o.c.m, o.c.g))} · ${h(nombreGrupoH(o.c.g))} en <b>${h(escuela(o.esc).corto)}</b>. <a href="#/" >Cambiar escuela</a></div>`;
+  if (!ses.length) return html + `<div class="h-et">Hoy</div><div class="h-cl">Sin clases en ${h(escuela(escA).corto)}</div>` + (otraAct ? aviso(otraAct) : otraProx ? aviso(otraProx) : '');
   const act = ses.find(o => m >= aMin(o.ini) && m < aMin(o.fin));
   const prox = ses.find(o => aMin(o.ini) > m && o !== act);
-  if (act) html += `<div class="h-et">Ahora · ${act.n}° módulo${escuelasEnUso().length > 1 ? ' · ' + h(escuela(act.esc).corto) : ''}</div><div class="h-cl">${txt(act)}</div><div class="h-hr">${act.ini} – ${act.fin} · termina en ${aMin(act.fin) - m} min</div>`;
+  if (act) html += `<div class="h-et">Ahora · ${act.n}° módulo</div><div class="h-cl">${txt(act)}</div><div class="h-hr">${act.ini} – ${act.fin} · termina en ${aMin(act.fin) - m} min</div>`;
   else if (m < aMin(ses[0].ini)) html += `<div class="h-et">Hoy</div><div class="h-cl">Aún no empiezan tus clases</div>`;
   else if (m >= aMin(ses[ses.length - 1].fin)) html += `<div class="h-et">Hoy</div><div class="h-cl">Terminaron tus clases</div>`;
   else html += `<div class="h-et">Ahora</div><div class="h-cl">Hora libre</div>`;
-  if (prox) html += `<div class="h-sig"><b>Siguiente:</b> ${txt(prox)} a las ${prox.ini}${prox.esc !== (act || {}).esc && escuelasEnUso().length > 1 ? ` <b>(en ${h(escuela(prox.esc).corto)})</b>` : ''}</div>`;
-  else if (act || m < aMin(ses[ses.length - 1].fin)) html += `<div class="h-sig">No tienes más clases hoy.</div>`;
+  if (prox) html += `<div class="h-sig"><b>Siguiente:</b> ${txt(prox)} a las ${prox.ini}</div>`;
+  else if (act || m < aMin(ses[ses.length - 1].fin)) html += `<div class="h-sig">No tienes más clases aquí hoy.</div>`;
+  if (otraAct && !act) html += aviso(otraAct);
+  else if (otraProx && (!prox || aMin(otraProx.ini) < aMin(prox.ini))) html += aviso(otraProx);
   if (act && grupo(act.c.g)) html += `<a class="btn primary" style="margin-top:.6rem;display:inline-flex;align-items:center" href="#/lista/${encodeURIComponent(act.c.g)}/${act.c.m}">Pasar lista de ${h(nombreGrupoH(act.c.g))} · ${h(nombreMateria(act.c.m, act.c.g))}</a>`;
   return html;
 }
@@ -1063,7 +1112,7 @@ function vistaHorario(v) {
   const ahora = new Date(), d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
   if (!S.diaHorario) S.diaHorario = d >= 1 && d <= 5 ? d : 1;
   const ds = S.diaHorario, editar = !!S.editarHorario;
-  const escs = escuelas().filter(e => escuelasEnUso().some(x => x.id === e.id) || Object.keys(horarioEsc(e.id).clases || {}).length);
+  const escs = [escuela(escActual() || '202')];
   const bloque = e => {
     const hz = horarioEsc(e.id), hay = (hz.modulos || []).some(x => hz.clases[ds + '-' + x.n]);
     const cab = escs.length > 1 ? `<h3 class="h-esc">${h(e.corto)}${hz.modulos && hz.modulos.length ? ` <span class="tenue">${hz.modulos[0].ini}–${hz.modulos[hz.modulos.length - 1].fin}</span>` : ''}</h3>` : '';
@@ -1165,11 +1214,12 @@ function htmlConcentrado(dat) {
   </section>`;
 }
 function vistaReporte(v) {
-  $('#titulo').textContent = 'Reporte mensual';
-  const gs = grupos();
-  if (!gs.length) { v.innerHTML = '<div class="card">Primero importa tus grupos.</div>'; return; }
+  $('#titulo').textContent = 'Reporte · ' + escuela(escActual() || '202').corto;
+  const gs = gruposEsc();
+  if (!gs.length) { v.innerHTML = '<div class="card">Primero importa los grupos de esta escuela.</div>'; return; }
   const d = new Date();
-  const sel = S.selReporte || (S.selReporte = { tipo: 'asis', g: S.meta.ultimoGrupo && grupo(S.meta.ultimoGrupo) ? S.meta.ultimoGrupo : gs[0].id, anio: d.getFullYear(), mes: d.getMonth() });
+  if (S.selReporte && S.selReporte.esc !== (escActual() || '202')) S.selReporte = null;
+  const sel = S.selReporte || (S.selReporte = { esc: escActual() || '202', tipo: 'asis', g: gs[0].id, anio: d.getFullYear(), mes: d.getMonth() });
   const anios = []; for (let a = d.getFullYear() - 2; a <= d.getFullYear() + 1; a++) anios.push(a);
   const pend = S.outbox.size, conf = S.conflicts.size;
   const ultima = S.meta.ultimaSync ? new Date(S.meta.ultimaSync) : null;
@@ -1180,7 +1230,7 @@ function vistaReporte(v) {
   <div class="card"><h2>Concentrado mensual</h2>
     <div class="tabs" id="r-tipo"><a href="javascript:void 0" data-t="asis" class="${sel.tipo === 'asis' ? 'activo' : ''}">✓ Asistencia</a><a href="javascript:void 0" data-t="trab" class="${sel.tipo === 'trab' ? 'activo' : ''}">📝 Trabajos</a></div>
     <div class="fila">
-      <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Todos los grupos</option>${escuelasEnUso().map(e => { const l = gs.filter(g => (g.esc || '202') === e.id); return (escuelasEnUso().length > 1 ? `<option value="esc:${h(e.id)}" ${sel.g === 'esc:' + e.id ? 'selected' : ''}>Todos · ${h(e.corto)}</option>` : '') + l.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(nombreGrupoL(g.id))}</option>`).join(''); }).join('')}</select></label>
+      <label class="campo" style="flex:1;min-width:150px"><span>Grupo</span><select id="r-g"><option value="*" ${sel.g === '*' ? 'selected' : ''}>Todos los grupos</option>${gs.map(g => `<option value="${h(g.id)}" ${sel.g === g.id ? 'selected' : ''}>${h(g.nombre)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1;min-width:140px"><span>Materia</span><select id="r-mat"><option value="*">Todas</option>${(sel.g.startsWith('esc:') || sel.g === '*' ? ORDEN_MAT.filter(m => gs.some(g => materiasDe(g.id).includes(m))) : materiasDe(sel.g)).map(m => `<option value="${m}" ${sel.mat === m ? 'selected' : ''}>${h(sel.g !== '*' && !sel.g.startsWith('esc:') ? nombreMateria(m, sel.g) : MATERIAS[m] || m)}</option>`).join('')}</select></label>
       <label class="campo" style="flex:1;min-width:140px"><span>Mes</span><select id="r-m">${MESES.map((m, i) => `<option value="${i}" ${sel.mes === i ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       <label class="campo" style="width:110px"><span>Año</span><select id="r-a">${anios.map(a => `<option ${sel.anio === a ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
@@ -1191,7 +1241,7 @@ function vistaReporte(v) {
   </div>
   <div class="card scroll" id="r-prev"></div>`;
   if (!sel.mat) sel.mat = '*';
-  const ids = () => sel.g === '*' ? gs.map(g => g.id) : sel.g.startsWith('esc:') ? gs.filter(g => (g.esc || '202') === sel.g.slice(4)).map(g => g.id) : [sel.g];
+  const ids = () => sel.g === '*' ? gs.map(g => g.id) : [sel.g];
   const combos = () => ids().flatMap(id => materiasDe(id).filter(m => sel.mat === '*' || m === sel.mat).map(m => [id, m]));
   const esTrab = () => sel.tipo === 'trab';
   const datos = () => {
@@ -1217,7 +1267,7 @@ function vistaReporte(v) {
         filas.push([]);
       });
       filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene']);
-      descargar(`trabajos_${sel.g === '*' ? 'todos' : sel.g.replace('esc:', 'esc')}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+      descargar(`trabajos_${escuela(sel.esc).corto.replace(/\s/g, '')}_${sel.g === '*' ? 'todos' : sel.g}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
       return;
     }
     datos().forEach(dat => {
@@ -1227,7 +1277,7 @@ function vistaReporte(v) {
       filas.push([]);
     });
     filas.push(['A = asistencia; F = falta; SR = sin registrar; B = ya no viene']);
-    descargar(`concentrado_${sel.g === '*' ? 'todos' : sel.g.replace('esc:', 'esc')}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
+    descargar(`concentrado_${escuela(sel.esc).corto.replace(/\s/g, '')}_${sel.g === '*' ? 'todos' : sel.g}${sel.mat === '*' ? '' : '_' + sel.mat}_${MESES[sel.mes]}_${sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
   };
 }
 function imprimir(lista, plantilla = htmlConcentrado, campo = 'fechas') {
@@ -1465,7 +1515,7 @@ function exportarRegistrosCSV() {
 function vistaConfig(v) {
   $('#titulo').textContent = 'Configuración y respaldo';
   const c = config();
-  const gs = grupos();
+  const gs = gruposEsc();
   const ultR = S.meta.ultimoRespaldo ? new Date(S.meta.ultimoRespaldo) : null;
   const sc = (c.sinClase || []).slice().sort((a, b) => a.f.localeCompare(b.f));
   v.innerHTML = `
@@ -1484,7 +1534,7 @@ function vistaConfig(v) {
       </details>
       <button class="btn primary" id="vincular">Vincular este dispositivo</button>`}
   </div>
-  <div class="card"><h2>Alumnos y grupos</h2>
+  <div class="card"><h2>Alumnos y grupos · ${h(escuela(escActual() || '202').corto)}</h2>
     <p><a class="btn primary" href="#/importar">Importar o actualizar desde el archivo «reporte»</a></p>
     ${gs.length ? `<ul class="lista-simple">${gs.map(g => `<li><span><b>${h(nombreGrupoL(g.id))}</b> · ${alumnosDe(g.id).filter(s => !bajaVigente(s)).length} activos · ${materiasDe(g.id).map(m => `${h(nombreMateria(m, g.id))}: ${diasDe(g.id, m).map(d => DIAS[d].slice(0, 3)).join(', ') || 'sin días'}`).join(' · ') || '<b>sin materias en el horario</b>'}</span><a class="btn small" href="#/grupo/${encodeURIComponent(g.id)}">Administrar</a></li>`).join('')}</ul>` : '<p class="tenue">Sin grupos todavía.</p>'}
   </div>
