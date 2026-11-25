@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -254,6 +254,7 @@ function render() {
       case 'trabajos': vistaTrabajos(v, r.args[0]); break;
       case 'trabajo': vistaTrabajo(v, r.args[0], r.args[1]); break;
       case 'conflictos': vistaConflictos(v); break;
+      case 'horario': vistaHorario(v); break;
       default: vistaGrupos(v);
     }
   } catch (e) { console.error(e); v.innerHTML = `<div class="error">Ocurrió un error al mostrar esta pantalla: ${h(e.message)}</div>`; }
@@ -892,6 +893,99 @@ function htmlTrabajos(dat) {
   </section>`;
 }
 
+/* ---------------- Horario ---------------- */
+const MATERIAS = { TEC: 'Tecnología', ART: 'Artes', TUT: 'Tutoría' };
+const ROMANO = { 1: 'I', 2: 'II', 3: 'III' };
+function horarioPrecargado() {
+  const mod = [['1', '07:30', '08:20'], ['2', '08:20', '09:10'], ['3', '09:10', '10:00'], ['4', '10:00', '10:50'], ['R', '10:50', '11:10'], ['5', '11:10', '12:00'], ['6', '12:00', '12:50'], ['7', '12:50', '13:40']]
+    .map(([n, ini, fin]) => ({ n, ini, fin }));
+  const c = {};
+  const p = (d, n, m, g) => { c[d + '-' + n] = { m, g }; };
+  p(1, 1, 'TEC', '1B'); p(1, 2, 'TEC', '1A'); p(1, 3, 'TEC', '2A'); p(1, 4, 'TEC', '3A'); p(1, 5, 'ART', '3B'); p(1, 6, 'TEC', '2B'); p(1, 7, 'ART', '3A');
+  p(2, 1, 'TEC', '3A'); p(2, 2, 'TEC', '1A'); p(2, 3, 'TEC', '3B'); p(2, 4, 'TEC', '1B');
+  p(3, 1, 'TEC', '2A'); p(3, 2, 'TEC', '1A'); p(3, 3, 'ART', '3B'); p(3, 4, 'TEC', '2B'); p(3, 5, 'TEC', '1B'); p(3, 6, 'ART', '3B'); p(3, 7, 'TUT', '3B');
+  p(4, 4, 'TEC', '3A'); p(4, 5, 'TEC', '3B'); p(4, 6, 'ART', '3A'); p(4, 7, 'TEC', '2B');
+  p(5, 5, 'TEC', '3B'); p(5, 6, 'TEC', '2A'); p(5, 7, 'ART', '3A');
+  return { modulos: mod, clases: c };
+}
+function horario() { const it = S.items.get('c:horario'); return it && !it.del ? it.d : horarioPrecargado(); }
+function nombreGrupoH(g) { const gr = grupo(g); if (gr) return gr.nombre; const x = grupoDesde(g); return x ? x.nombre : g; }
+function nombreMateria(m, g) { const gr = (String(g).match(/\d/) || [''])[0]; if (m === 'TUT') return 'Tutoría'; return (MATERIAS[m] || m) + (ROMANO[gr] ? ' ' + ROMANO[gr] : ''); }
+const aMin = t => { const [a, b] = String(t).split(':').map(Number); return a * 60 + b; };
+function tarjetaAhora(hz, ahora) {
+  const d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
+  const clase = n => hz.clases[d + '-' + n];
+  const txt = (c, n) => `${h(nombreMateria(c.m, c.g))} · ${h(nombreGrupoH(c.g))}`;
+  if (d < 1 || d > 5) return `<div class="h-et">Hoy</div><div class="h-cl">Sin clases</div><div class="h-hr">Es fin de semana.</div>`;
+  const motivo = sinClaseSet().get(ymd(ahora));
+  let html = motivo ? `<div class="aviso" style="margin:0 0 .5rem">Hoy: <b>${h(motivo)}</b> (según tu calendario escolar).</div>` : '';
+  const mods = hz.modulos;
+  const act = mods.find(x => m >= aMin(x.ini) && m < aMin(x.fin));
+  const cAct = act && act.n !== 'R' ? clase(act.n) : null;
+  const prox = mods.filter(x => x.n !== 'R' && aMin(x.ini) > m && clase(x.n))[0];
+  if (cAct) html += `<div class="h-et">Ahora · ${act.n}° módulo</div><div class="h-cl">${txt(cAct)}</div><div class="h-hr">${act.ini} – ${act.fin} · termina en ${aMin(act.fin) - m} min</div>`;
+  else if (act && act.n === 'R') html += `<div class="h-et">Ahora</div><div class="h-cl">Receso</div><div class="h-hr">${act.ini} – ${act.fin}</div>`;
+  else if (m < aMin(mods[0].ini)) html += `<div class="h-et">Hoy</div><div class="h-cl">Aún no empiezan las clases</div>`;
+  else if (m >= aMin(mods[mods.length - 1].fin)) html += `<div class="h-et">Hoy</div><div class="h-cl">Terminaron tus clases</div>`;
+  else html += `<div class="h-et">Ahora</div><div class="h-cl">Hora libre</div>${act ? `<div class="h-hr">${act.n}° módulo · ${act.ini} – ${act.fin}</div>` : ''}`;
+  if (prox) html += `<div class="h-sig"><b>Siguiente:</b> ${txt(clase(prox.n))} a las ${prox.ini} (${prox.n}° módulo)</div>`;
+  else if (m < aMin(mods[mods.length - 1].fin)) html += `<div class="h-sig">No tienes más clases hoy.</div>`;
+  if (cAct && cAct.m === 'TEC' && grupo(cAct.g)) html += `<a class="btn primary" style="margin-top:.6rem;display:inline-flex;align-items:center" href="#/lista/${encodeURIComponent(cAct.g)}">Pasar lista de ${h(nombreGrupoH(cAct.g))}</a>`;
+  return html;
+}
+function vistaHorario(v) {
+  $('#titulo').textContent = 'Mi horario';
+  const hz = horario(), ahora = new Date(), d = ahora.getDay(), m = ahora.getHours() * 60 + ahora.getMinutes();
+  if (!S.diaHorario) S.diaHorario = d >= 1 && d <= 5 ? d : 1;
+  const ds = S.diaHorario, editar = !!S.editarHorario;
+  v.innerHTML = `
+  <section class="h-ahora" id="h-ahora" aria-live="polite">${tarjetaAhora(hz, ahora)}</section>
+  <div class="h-dias" role="tablist">${[1, 2, 3, 4, 5].map(x => `<button role="tab" data-d="${x}" class="${x === ds ? 'sel' : ''} ${x === d ? 'hoy' : ''}" aria-selected="${x === ds}">${DIAS[x].slice(0, 3)}</button>`).join('')}</div>
+  ${editar ? '<div class="aviso">Modo modificar: toca un módulo para cambiar la clase. Los cambios se guardan y se sincronizan con tus otros dispositivos.</div>' : ''}
+  <ol class="h-lista">${hz.modulos.map(mod => {
+    if (mod.n === 'R') return `<li class="h-receso"><span class="h-t">${mod.ini}</span><span>Receso</span></li>`;
+    const c = hz.clases[ds + '-' + mod.n];
+    const est = ds === d ? (m >= aMin(mod.ini) && m < aMin(mod.fin) ? ' actual' : m >= aMin(mod.fin) ? ' pasada' : '') : '';
+    const t = `<span class="h-t"><b>${mod.n}° mód.</b>${mod.ini}–${mod.fin}</span>`;
+    const lleva = !editar && c && c.m === 'TEC' && grupo(c.g);
+    const tag = editar ? 'button' : lleva ? 'a' : 'div';
+    const attr = editar ? `type="button" data-mod="${mod.n}"` : lleva ? `href="#/lista/${encodeURIComponent(c.g)}"` : '';
+    const cont = c ? `<span class="h-c">${h(nombreGrupoH(c.g))}<small>${h(nombreMateria(c.m, c.g))}${lleva ? ' · tocar para pasar lista ›' : ''}</small></span>` : `<span class="h-c libre">Libre</span>`;
+    return `<li class="${c ? 'h-' + c.m : 'h-libre'}${est}"><${tag} class="h-fila" ${attr}>${t}${cont}</${tag}></li>`;
+  }).join('')}</ol>
+  <div class="h-ley"><span class="h-TEC">Tecnología</span><span class="h-ART">Artes</span><span class="h-TUT">Tutoría</span></div>
+  <div class="fila" style="margin-top:.9rem">
+    <button class="btn ${editar ? 'primary' : ''}" data-acc="editar">${editar ? '✓ Terminar de modificar' : '✏️ Modificar horario'}</button>
+    ${editar ? '<button class="btn danger" data-acc="restaurar">Restaurar horario original</button>' : ''}
+  </div>
+  <p class="tenue">Por ahora solo Tecnología tiene lista de asistencia en la app; Artes y Tutoría se muestran para consulta.</p>`;
+  v.onclick = async ev => {
+    const dia = ev.target.closest('[data-d]');
+    if (dia) { S.diaHorario = Number(dia.dataset.d); render(); return; }
+    const b = ev.target.closest('[data-acc],[data-mod]'); if (!b) return;
+    if (b.dataset.acc === 'editar') { S.editarHorario = !editar; render(); }
+    else if (b.dataset.acc === 'restaurar') {
+      if (!await confirmar('Restaurar horario', 'Se reemplazará tu horario por el original de 2026-2027. ¿Continuar?', 'Restaurar')) return;
+      await guardar([{ t: 'c', id: 'horario', d: horarioPrecargado() }]); toast('Horario restaurado.'); render();
+    } else if (b.dataset.mod) editarModulo(ds, b.dataset.mod);
+  };
+}
+async function editarModulo(dia, n) {
+  const hz = horario(), k = dia + '-' + n, c = hz.clases[k] || null, mod = hz.modulos.find(x => x.n === n);
+  const gs = grupos(); const ids = gs.length ? gs.map(g => g.id) : ['1A', '1B', '2A', '2B', '3A', '3B'];
+  const r = await dialogo({
+    titulo: `${DIAS[dia]} · ${n}° módulo (${mod.ini}–${mod.fin})`, ok: 'Guardar',
+    html: `<label class="campo"><span>Materia</span><select name="m"><option value="">Libre (sin clase)</option>${Object.entries(MATERIAS).map(([k2, t]) => `<option value="${k2}" ${c && c.m === k2 ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="campo"><span>Grupo</span><select name="g">${ids.map(g => `<option value="${h(g)}" ${c && c.g === g ? 'selected' : ''}>${h(nombreGrupoH(g))}</option>`).join('')}</select></label>`
+  });
+  if (!r) return;
+  const m = r.querySelector('[name=m]').value, g = r.querySelector('[name=g]').value;
+  const clases = { ...hz.clases };
+  if (m) clases[k] = { m, g }; else delete clases[k];
+  await guardar([{ t: 'c', id: 'horario', d: { ...hz, clases } }]);
+  toast('Horario guardado.'); render();
+}
+
 /* ---------------- Concentrado mensual ---------------- */
 function fechasDelMes(gid, anio, mes) {
   const sc = sinClaseSet(), r = new Set();
@@ -1015,6 +1109,7 @@ function describir(k, val) {
   if (k.startsWith('g:')) return `${d.nombre} · días: ${(d.dias || []).map(x => DIAS[x].slice(0, 3)).join(', ') || 'ninguno'}`;
   if (k.startsWith('w:')) return TRAB_TXT[d.e || ''];
   if (k.startsWith('a:')) return `${d.nombre} · entrega ${fmtF(d.entrega)}`;
+  if (k === 'c:horario') return `${Object.keys(d.clases || {}).length} clases por semana`;
   return 'Configuración general';
 }
 function tituloConflicto(c) {
@@ -1024,6 +1119,7 @@ function tituloConflicto(c) {
   if (c.k.startsWith('g:')) return 'Datos del grupo ' + (d.nombre || '');
   if (c.k.startsWith('w:')) { const s = alumno(d.s), a = actividad(d.a); return `Trabajo «${a ? a.nombre : ''}» · ${s ? nombreCompleto(s) : d.s}`; }
   if (c.k.startsWith('a:')) return 'Actividad ' + (d.nombre || '');
+  if (c.k === 'c:horario') return 'Horario de clases';
   return 'Configuración general';
 }
 function vistaConflictos(v) {
@@ -1326,6 +1422,7 @@ async function iniciar() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.fechaLista < hoy() && S.vistaActual !== 'lista') S.fechaLista = hoy(); sincronizar(false); } });
   document.addEventListener('focusout', () => { setTimeout(() => { if (S.pendienteRender && !(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) { S.pendienteRender = false; refrescarSiConviene(); } }, 200); });
   setInterval(() => { if (document.visibilityState === 'visible') sincronizar(false); }, 90000);
+  setInterval(() => { if (S.vistaActual === 'horario' && document.visibilityState === 'visible' && !$('#dlg').open) { const x = $('#h-ahora'); if (x) x.innerHTML = tarjetaAhora(horario(), new Date()); } }, 30000);
   alCambiarRuta();
   sincronizar(false);
   registrarSW();
