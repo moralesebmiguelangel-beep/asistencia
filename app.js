@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.3.1';
+const APP_VERSION = '2.3.2';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -968,7 +968,7 @@ function vistaTrabajos(v, gid, mArg) {
   <div class="herr">
     <input type="search" id="buscar" placeholder="Buscar alumno…" value="${h(S.busqueda)}" aria-label="Buscar por nombre">
     <button class="btn" data-acc="orden">${modo === 'az' ? 'Orden: A–Z' : 'Orden: reporte'}</button>
-    <button class="btn todos" data-acc="todosT">Marcar «Terminó» a los pendientes</button>
+    <button class="btn todos" data-acc="todosT">Marcar «Avance» a los pendientes</button>
   </div>
   <ul class="alumnos" id="alumnos"></ul>
   <div class="card" style="margin-top:1rem"><div class="cab-lista" style="margin:0"><h3 style="margin:0">Actividades con fecha de entrega</h3><button class="btn" data-acc="nueva">+ Nueva actividad</button></div>
@@ -1007,8 +1007,8 @@ function vistaTrabajos(v, gid, mArg) {
       const act = actDiariaPseudo(gid, m, f);
       const pend = alumnosDeLista(gid, f).filter(s => !estTrabEf(act, s.id).e).map(s => s.id);
       if (!pend.length) { toast('No hay alumnos pendientes.'); return; }
-      await marcarTrabDia(gid, m, f, pend, 'T', true);
-      toast(`Se marcó «Terminó» a ${pend.length} alumno(s).`, { accion: 'Deshacer', ms: 10000, alPulsar: async () => { await guardar(pend.map(sid => ({ t: 'w', id: act.id + '|' + sid, d: { a: act.id, s: sid, g: gid, e: '', f } }))); render(); } });
+      await marcarTrabDia(gid, m, f, pend, 'A', true);
+      toast(`Se marcó «Avance» a ${pend.length} alumno(s).`, { accion: 'Deshacer', ms: 10000, alPulsar: async () => { await guardar(pend.map(sid => ({ t: 'w', id: act.id + '|' + sid, d: { a: act.id, s: sid, g: gid, e: '', f } }))); render(); } });
     }
     else if (acc === 'nueva') {
       const nueva = await dialogoActividad(gid);
