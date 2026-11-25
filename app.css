@@ -233,3 +233,6 @@ label.chk{display:inline-flex;align-items:center;gap:.3rem;border:2px solid var(
 table.rep-t th.dia small{font-weight:400;font-size:7.5pt}
 .ev-dia{background:#f8fafc}
 .ev-dia .campo{margin:.2rem 0}
+.alumno.falto{background:#fff7f6}
+.b-est.wN.auto[aria-pressed=true]{background:#fff;color:var(--rojo);border-style:dashed}
+.contador small{display:block;font-size:.72rem;font-weight:600}

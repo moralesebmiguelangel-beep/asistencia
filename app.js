@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -893,14 +893,18 @@ function actividadesDe(g, m = null) {
 }
 function trabajo(aid, sid) { const it = S.items.get('w:' + aid + '|' + sid); return it && !it.del ? it.d : null; }
 function estTrab(aid, sid) { const w = trabajo(aid, sid); return w ? w.e || '' : ''; }
+/* Estado efectivo: lo marcado manda; si no hay marca y el alumno tiene falta ese día en esa materia,
+   la actividad diaria cuenta como «No hizo nada» (faltó). */
+function faltoActividad(a, sid) { return !!(a && a.diaria) && estado(sid, a.entrega, matDe(a)) === 'F'; }
+function estTrabEf(a, sid) { const e = estTrab(a.id, sid); if (e) return { e, auto: false }; return faltoActividad(a, sid) ? { e: 'N', auto: true } : { e: '', auto: false }; }
 function fechaRefActividad(a) { const f = hoy(); return a.entrega && a.entrega < f ? a.entrega : f; }
 function alumnosDeActividad(a) {
   const ref = fechaRefActividad(a);
   return ordenar(alumnosDe(a.g).filter(s => activoEn(s, ref) || estTrab(a.id, s.id)), S.meta.orden || 'reporte');
 }
 function contarTrab(a, lista) {
-  const c = { T: 0, A: 0, N: 0, p: 0 };
-  lista.forEach(s => { const e = estTrab(a.id, s.id); if (e) c[e]++; else c.p++; });
+  const c = { T: 0, A: 0, N: 0, p: 0, faltas: 0 };
+  lista.forEach(s => { const x = estTrabEf(a, s.id); if (x.e) c[x.e]++; else c.p++; if (x.auto) c.faltas++; });
   return c;
 }
 function tabsGrupo(gid, activo) {
@@ -1001,7 +1005,7 @@ function vistaTrabajos(v, gid, mArg) {
     else if (acc === 'wT' || acc === 'wA' || acc === 'wN') marcarTrabDia(gid, m, f, [b.dataset.s], acc.slice(1));
     else if (acc === 'todosT') {
       const act = actDiariaPseudo(gid, m, f);
-      const pend = alumnosDeLista(gid, f).filter(s => !estTrab(act.id, s.id)).map(s => s.id);
+      const pend = alumnosDeLista(gid, f).filter(s => !estTrabEf(act, s.id).e).map(s => s.id);
       if (!pend.length) { toast('No hay alumnos pendientes.'); return; }
       await marcarTrabDia(gid, m, f, pend, 'T', true);
       toast(`Se marcó «Terminó» a ${pend.length} alumno(s).`, { accion: 'Deshacer', ms: 10000, alPulsar: async () => { await guardar(pend.map(sid => ({ t: 'w', id: act.id + '|' + sid, d: { a: act.id, s: sid, g: gid, e: '', f } }))); render(); } });
@@ -1018,14 +1022,14 @@ function pintarTrabDia(gid, m, f) {
   ul.innerHTML = lista.map((s, i) => q && !claveNombre(nombreCompleto(s)).includes(q) ? '' : filaTrab(s, i + 1, a)).join('')
     || `<li class="tenue">${lista.length ? 'Ningún alumno coincide con la búsqueda.' : 'No hay alumnos activos.'}</li>`;
   const c = contarTrab(a, lista), el = $('#contadores');
-  if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
+  if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada${c.faltas ? `<small>${c.faltas} faltó</small>` : ''}</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
 }
 async function marcarTrabDia(gid, m, f, sids, e, forzar = false) {
   const existe = actividad(idDiaria(gid, m, f)), a = actDiariaPseudo(gid, m, f);
   const cambios = [];
   if (!existe) { const nom = $('#act-nombre') ? $('#act-nombre').value.trim() : ''; cambios.push({ t: 'a', id: a.id, d: { ...a, nombre: nom, p: proyectoActual(gid, m) } }); }
   sids.forEach(sid => {
-    const nuevo = !forzar && estTrab(a.id, sid) === e ? '' : e;
+    const nuevo = !forzar && estTrab(a.id, sid) === e ? '' : e;   // la marca automática por falta no cuenta como marcada
     cambios.push({ t: 'w', id: a.id + '|' + sid, d: { a: a.id, s: sid, g: gid, e: nuevo, f } });
   });
   await guardar(cambios);
@@ -1033,7 +1037,7 @@ async function marcarTrabDia(gid, m, f, sids, e, forzar = false) {
     const s = alumno(sids[0]), li = document.getElementById('al-' + sids[0]);
     if (s && li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaTrab(s, n, actDiariaPseudo(gid, m, f)); }
     const lista = alumnosDeLista(gid, f), c = contarTrab(actDiariaPseudo(gid, m, f), lista), el = $('#contadores');
-    if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
+    if (el) el.innerHTML = `<div class="contador a"><b>${c.T}</b>Terminó</div><div class="contador av"><b>${c.A}</b>Avance</div><div class="contador f"><b>${c.N}</b>No hizo nada${c.faltas ? `<small>${c.faltas} faltó</small>` : ''}</div><div class="contador p"><b>${c.p}</b>Sin registrar</div>`;
   } else pintarTrabDia(gid, m, f);
 }
 function vistaTrabajo(v, gid, aid) {
@@ -1071,12 +1075,12 @@ function vistaTrabajo(v, gid, aid) {
   };
 }
 function filaTrab(s, i, a) {
-  const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
-  const tarde = !a.diaria && e === 'T' && w.f && w.f > a.entrega;
+  const w = trabajo(a.id, s.id), ef = estTrabEf(a, s.id), e = ef.e;
+  const tarde = !a.diaria && e === 'T' && w && w.f && w.f > a.entrega;
   const cls = e ? 'w' + e : 'N0';
-  const btn = (k, txt) => `<button class="b-est w${k}" data-acc="w${k}" data-s="${h(s.id)}" aria-pressed="${e === k}">${e === k ? '● ' : ''}${txt}</button>`;
-  return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
-    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${e && w.f && !a.diaria ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
+  const btn = (k, txt) => `<button class="b-est w${k}${ef.auto && k === 'N' ? ' auto' : ''}" data-acc="w${k}" data-s="${h(s.id)}" aria-pressed="${e === k}">${e === k ? '● ' : ''}${txt}</button>`;
+  return `<li class="alumno st-${cls}${ef.auto ? ' falto' : ''}" id="al-${h(s.id)}">
+    <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${e ? 'w' + e : 'N'}">${TRAB_TXT[e]}${ef.auto ? ' · faltó' : ''}${e && w && w.f && !a.diaria ? ' · ' + fmtF(w.f).slice(0, 5) : ''}${tarde ? ' · tarde' : ''}</span></div>
     <div class="botones">${btn('T', 'Terminó')}${btn('A', 'Avance')}${btn('N', 'Nada')}</div></li>`;
 }
 function pintarTrabajos(a) {
@@ -1111,6 +1115,7 @@ function datosTrabajos(gid, ini, fin, m = 'TEC', periodo = '') {
     let cuenta = 0;
     const celdas = acts.map(a => {
       const w = trabajo(a.id, s.id), e = w ? w.e || '' : '';
+      if (!e && faltoActividad(a, s.id)) { t.N++; cuenta++; return { m: 'F', c: 'wN' }; }
       if (e) { t[e]++; cuenta++; const tarde = !a.diaria && e === 'T' && w.f && w.f > a.entrega; return { m: TRAB_MARCA[e] + (tarde ? '*' : ''), c: 'w' + e }; }
       if (bajaEn(s, a.entrega)) return { m: 'B', c: 'b' };
       cuenta++;
@@ -1133,7 +1138,7 @@ function htmlTrabajos(dat) {
       <tr><th>No.</th><th style="text-align:left">Alumno</th>${acts.map((a, i) => `<th class="dia" title="${h(nombreAct(a))}">${i + 1}<br><small>${etiq(a)}${a.diaria ? '' : '<br>entrega'}</small></th>`).join('')}<th>Termin.</th><th>Avance</th><th>Nada</th><th>Cumpli&shy;miento</th></tr></thead>
     <tbody>${filas.length ? filas.map((r, i) => `<tr><td>${i + 1}</td><td class="n">${h(nombreCompleto(r.s))}${r.baja ? `<small>Ya no viene desde ${fmtF(r.baja.desde)}</small>` : ''}</td>${r.celdas.map(x => `<td class="${x.c || ''}">${x.m}</td>`).join('')}<td class="tot">${r.t.T}</td><td class="tot">${r.t.A}</td><td class="tot">${r.t.N}</td><td class="tot">${r.pct == null ? '—' : r.pct + ' %'}</td></tr>`).join('') : `<tr><td colspan="${n + 6}">Sin alumnos</td></tr>`}</tbody></table>
     ${n ? `<p class="rep-ley"><b>Actividades:</b> ${acts.map((a, i) => `<b>${i + 1}</b> (${fmtF(a.entrega).slice(0, 5)}) = ${h(nombreAct(a))}${a.diaria ? '' : ' · entrega'}`).join(' · ')}</p>` : '<p class="rep-ley"><b>No hay actividades registradas en este periodo.</b></p>'}
-    <p class="rep-ley">T = terminó · T* = terminó después de la fecha de entrega · AV = avance · N = no hizo nada · – = sin registrar (cuenta como no entregada) · B = ya no viene (no cuenta). Cumplimiento = (T + ½ AV) ÷ actividades del periodo.${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
+    <p class="rep-ley">T = terminó · T* = terminó después de la fecha de entrega · AV = avance · N = no hizo nada · F = faltó ese día (cuenta como no hizo nada) · – = sin registrar (cuenta como no entregada) · B = ya no viene (no cuenta). Cumplimiento = (T + ½ AV) ÷ actividades del periodo.${dat.omitidos ? ` No se listan ${dat.omitidos} alumno(s) dados de baja antes de este periodo.` : ''}</p>
     <div class="rep-firma"><div>Nombre del docente${c.docente ? `: <b>${h(c.docente)}</b>` : ''}</div><div>Firma</div></div>
   </section>`;
 }
@@ -1367,7 +1372,7 @@ function vistaReporte(v) {
         dat.filas.forEach((r, i) => filas.push([i + 1, r.s.id, nombreCompleto(r.s), ...r.celdas.map(x => x.m === '–' ? 'SR' : x.m), r.t.T, r.t.A, r.t.N, r.pct == null ? '' : r.pct, r.baja ? fmtF(r.baja.desde) : '']));
         filas.push([]);
       });
-      filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; SR = sin registrar; B = ya no viene; Cumplimiento = (T + ½ AV) / actividades del periodo']);
+      filas.push(['T = terminó; T* = terminó después de la fecha de entrega; AV = avance; N = no hizo nada; F = faltó (cuenta como no hizo nada); SR = sin registrar; B = ya no viene; Cumplimiento = (T + ½ AV) / actividades del periodo']);
       descargar(`evaluacion_continua_${escuela(sel.esc).corto.replace(/\s/g, '')}_${sel.g === '*' ? 'todos' : sel.g}${sel.mat === '*' ? '' : '_' + sel.mat}_${sel.per !== 'mes' ? 'semana_' + rangoSemana(sel.sem || hoy())[0] : MESES[sel.mes] + '_' + sel.anio}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
       return;
     }
