@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.3.1';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
