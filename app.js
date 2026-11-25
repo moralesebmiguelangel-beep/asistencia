@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const DIAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DIA_LETRA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -73,6 +73,8 @@ const S = {
   pendienteRender: false,
   vistaActual: '',
   importacion: null,
+  desbloqueos: {},      // 'grupo|fecha' -> hora (ms) en que se vuelve a bloquear
+  estadoBloqueo: '',
 };
 
 /* ---------------- IndexedDB ---------------- */
@@ -311,13 +313,15 @@ function vistaLista(v, gid) {
   </div>
   <div class="tenue">${h(fmtLargo(f))}${f === hoy() ? ' (hoy)' : ''}${clase ? '' : ` · <b>${motivo ? h(motivo) : 'No es día de clase de este grupo'}</b>; puedes registrar igualmente.`}</div>
   <div class="contadores" id="contadores"></div>
+  ${avisoBloqueo(gid, f)}
   <div class="herr">
     <input type="search" id="buscar" placeholder="Buscar alumno…" value="${h(S.busqueda)}" aria-label="Buscar por nombre">
     <button class="btn" data-acc="orden">${modo === 'az' ? 'Orden: A–Z' : 'Orden: reporte'}</button>
-    <button class="btn todos" data-acc="todos">Marcar asistencia a todos los pendientes</button>
+    <button class="btn todos" data-acc="todos"${listaBloqueada(gid, f) ? ' disabled' : ''}>Marcar asistencia a todos los pendientes</button>
   </div>
   <ul class="alumnos" id="alumnos"></ul>
   <p class="tenue">${inactivos ? `${inactivos} alumno(s) con «Ya no viene» no aparecen en esta fecha. ` : ''}<a href="#/grupo/${encodeURIComponent(gid)}">Ver alumnos inactivos y administrar grupo</a></p>`;
+  S.estadoBloqueo = gid + '|' + f + '|' + listaBloqueada(gid, f) + '|' + bloqueoNatural(f);
   pintarAlumnos(gid);
   $('#fecha').onchange = e => { if (e.target.value) { S.fechaLista = e.target.value; S.deshacer = null; render(); } };
   $('#buscar').oninput = e => { S.busqueda = e.target.value; pintarAlumnos(gid); };
@@ -327,6 +331,10 @@ function vistaLista(v, gid) {
     if (acc === 'dia-ant' || acc === 'dia-sig') { S.fechaLista = diaDeClaseVecino(gid, S.fechaLista, acc === 'dia-sig' ? 1 : -1); render(); }
     else if (acc === 'orden') { await setMeta('orden', modo === 'az' ? 'reporte' : 'az'); render(); }
     else if (acc === 'todos') marcarTodos(gid);
+    else if (acc === 'desbloquear') {
+      if (!await confirmar('Corregir asistencia', `¿Seguro que quieres corregir la lista de ${g.nombre} del ${fmtF(S.fechaLista)}? Quedará abierta ${MIN_DESBLOQUEO} minutos y cada cambio quedará anotado.`, 'Sí, corregir', false)) return;
+      S.desbloqueos[gid + '|' + S.fechaLista] = Date.now() + MIN_DESBLOQUEO * 60000; render();
+    } else if (acc === 'bloquear') { delete S.desbloqueos[gid + '|' + S.fechaLista]; render(); }
     else if (acc === 'A' || acc === 'F') marcar(gid, b.dataset.s, acc);
     else if (acc === 'B') darDeBaja(b.dataset.s);
   };
@@ -341,15 +349,35 @@ function diaDeClaseVecino(gid, f, dir) {
 function alumnosDeLista(gid, f) {
   return ordenar(alumnosDe(gid).filter(s => activoEn(s, f)), S.meta.orden || 'reporte');
 }
+/* ---- Bloqueo de la lista al terminar la jornada ---- */
+const MIN_DESBLOQUEO = 10;
+function finJornada() { const ms = (horario().modulos || []).filter(x => x.fin); return ms.length ? ms[ms.length - 1].fin : '13:40'; }
+function bloqueoNatural(f) {
+  const h0 = hoy(); if (f < h0) return true; if (f > h0) return false;
+  const n = new Date(); return n.getHours() * 60 + n.getMinutes() >= aMin(finJornada());
+}
+function desbloqueada(g, f) { const t = S.desbloqueos[g + '|' + f]; return !!t && t > Date.now(); }
+function listaBloqueada(g, f) { return bloqueoNatural(f) && !desbloqueada(g, f); }
+function avisoBloqueo(gid, f) {
+  if (!bloqueoNatural(f)) return '';
+  if (desbloqueada(gid, f)) {
+    const t = new Date(S.desbloqueos[gid + '|' + f]), hasta = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+    return `<div class="bloqueo abierto"><span>🔓 Corrección permitida hasta las <b>${hasta}</b>. Los cambios quedan anotados.</span><button class="btn small" data-acc="bloquear">🔒 Bloquear ya</button></div>`;
+  }
+  const motivo = f < hoy() ? 'Lista de un día pasado' : `La jornada terminó a las ${finJornada()}`;
+  return `<div class="bloqueo"><span>🔒 <b>${motivo}:</b> la asistencia está bloqueada.</span><button class="btn small primary" data-acc="desbloquear">🔓 Desbloquear para corregir</button></div>`;
+}
+function correccion(s, f, de, a) { return { t: 'h', id: 'h' + Date.now().toString(36) + aleatorio(5), d: { g: s.g, s: s.id, f, de, a, cuando: new Date().toISOString() } }; }
 function filaAlumno(s, i, f) {
   const e = estado(s.id, f);
   const cls = e || 'N';
+  const dis = listaBloqueada(s.g, f) ? ' disabled' : '';
   return `<li class="alumno st-${cls}" id="al-${h(s.id)}">
     <div class="nom"><span><span class="num">${i}.</span><b>${h(nombreCompleto(s))}</b></span><span class="estado-txt ${cls}">${e === 'A' ? '✓ ' : e === 'F' ? '✗ ' : ''}${ESTADO_TXT[e]}</span></div>
     <div class="botones">
-      <button class="b-est A" data-acc="A" data-s="${h(s.id)}" aria-pressed="${e === 'A'}">${e === 'A' ? '✓ ' : ''}Asistencia</button>
-      <button class="b-est F" data-acc="F" data-s="${h(s.id)}" aria-pressed="${e === 'F'}">${e === 'F' ? '✗ ' : ''}Falta</button>
-      <button class="b-est B" data-acc="B" data-s="${h(s.id)}">Ya no viene</button>
+      <button class="b-est A" data-acc="A" data-s="${h(s.id)}" aria-pressed="${e === 'A'}"${dis}>${e === 'A' ? '✓ ' : ''}Asistencia</button>
+      <button class="b-est F" data-acc="F" data-s="${h(s.id)}" aria-pressed="${e === 'F'}"${dis}>${e === 'F' ? '✗ ' : ''}Falta</button>
+      <button class="b-est B" data-acc="B" data-s="${h(s.id)}"${dis}>Ya no viene</button>
     </div></li>`;
 }
 function pintarAlumnos(gid) {
@@ -369,9 +397,12 @@ function pintarContadores(gid) {
 async function marcar(gid, sid, e) {
   const s = alumno(sid); if (!s) return;
   const f = S.fechaLista;
+  if (listaBloqueada(gid, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); render(); return; }
   const actual = estado(sid, f);
   const nuevo = actual === e ? '' : e;   // tocar de nuevo el mismo botón lo regresa a «Sin registrar»
-  await guardar([cambiarEstado(s, f, nuevo)]);
+  const cambios = [cambiarEstado(s, f, nuevo)];
+  if (bloqueoNatural(f)) cambios.push(correccion(s, f, actual, nuevo));
+  await guardar(cambios);
   const li = document.getElementById('al-' + sid);
   if (li) { const n = li.querySelector('.num').textContent.replace('.', ''); li.outerHTML = filaAlumno(s, n, f); }
   pintarContadores(gid);
@@ -379,13 +410,16 @@ async function marcar(gid, sid, e) {
 async function marcarTodos(gid) {
   const f = S.fechaLista;
   const pend = alumnosDeLista(gid, f).filter(s => !estado(s.id, f));
+  if (listaBloqueada(gid, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
   if (!pend.length) { toast('No hay alumnos pendientes.'); return; }
-  await guardar(pend.map(s => cambiarEstado(s, f, 'A')));
+  const corr = bloqueoNatural(f);
+  await guardar(pend.flatMap(s => corr ? [cambiarEstado(s, f, 'A'), correccion(s, f, '', 'A')] : [cambiarEstado(s, f, 'A')]));
   const ids = pend.map(s => s.id);
   pintarAlumnos(gid);
   toast(`Se marcó asistencia a ${ids.length} alumno(s).`, {
     accion: 'Deshacer', ms: 10000, alPulsar: async () => {
-      const cambios = ids.map(id => alumno(id)).filter(s => s && estado(s.id, f) === 'A').map(s => cambiarEstado(s, f, ''));
+      if (listaBloqueada(gid, f)) { toast('La lista ya se bloqueó; desbloquéala para deshacer.'); return; }
+      const cambios = ids.map(id => alumno(id)).filter(s => s && estado(s.id, f) === 'A').flatMap(s => corr ? [cambiarEstado(s, f, ''), correccion(s, f, 'A', '')] : [cambiarEstado(s, f, '')]);
       await guardar(cambios); render(); toast('Se deshizo «Marcar asistencia a todos».');
     }
   });
@@ -393,6 +427,7 @@ async function marcarTodos(gid) {
 async function darDeBaja(sid) {
   const s = alumno(sid); if (!s) return;
   const f = S.fechaLista;
+  if (listaBloqueada(s.g, f)) { toast('La lista está bloqueada. Usa «Desbloquear para corregir».'); return; }
   const r = await dialogo({
     titulo: 'Ya no viene', ok: 'Confirmar baja',
     html: `<p><b>${h(nombreCompleto(s))}</b> dejará de aparecer en las listas a partir de la fecha indicada.</p>
@@ -432,6 +467,12 @@ function vistaGrupo(v, gid) {
     <div class="fila"><input type="text" id="nuevo-nombre" placeholder="APELLIDOS NOMBRE(S)" style="flex:1;min-width:220px"><button class="btn" data-acc="agregar">Agregar</button></div>
     <p class="tenue">Úsalo para altas a mitad de ciclo. Para cargas masivas usa «Importar».</p>
   </div>
+  <div class="card"><h2>Correcciones con permiso (${vivos('h').filter(x => x.d.g === gid).length})</h2>
+    ${(() => { const hs = vivos('h').map(x => x.d).filter(x => x.g === gid).sort((a, b) => b.cuando.localeCompare(a.cuando));
+      if (!hs.length) return '<p class="tenue">No se han corregido listas después de cerrarse.</p>';
+      return `<details><summary>Ver las últimas ${Math.min(hs.length, 100)}</summary><div class="scroll"><table class="t"><thead><tr><th>Clase del</th><th>Alumno</th><th>Cambio</th><th>Corregido el</th></tr></thead><tbody>${hs.slice(0, 100).map(x => { const al = alumno(x.s); return `<tr><td>${fmtF(x.f)}</td><td>${h(al ? nombreCompleto(al) : x.s)}</td><td>${ESTADO_TXT[x.de || '']} → <b>${ESTADO_TXT[x.a || '']}</b></td><td>${h(fmtHora(new Date(x.cuando)))}</td></tr>`; }).join('')}</tbody></table></div></details>
+        <button class="btn small" data-acc="csv-corr" style="margin-top:.5rem">Descargar correcciones (CSV)</button>`; })()}
+  </div>
   <div class="card"><h2>Borrar registros de un día</h2>
     <div class="fila"><input type="date" id="dia-borrar" value="${S.fechaLista}" style="width:auto"><button class="btn danger" data-acc="borrar-dia">Borrar la lista de ese día</button></div>
   </div>
@@ -464,6 +505,10 @@ function vistaGrupo(v, gid) {
       const maxo = Math.max(0, ...alumnosDe(gid).map(x => x.o || 0));
       await guardar([{ t: 's', id, d: { id, g: gid, ap: '', am: '', n: '', nc: normNombre(nom), o: maxo + 1, bajas: [] } }]);
       toast('Alumno agregado.'); render();
+    } else if (acc === 'csv-corr') {
+      const filas = [['Grupo', 'Fecha de la clase', 'ID alumno', 'Alumno', 'Antes', 'Después', 'Corregido el']];
+      vivos('h').map(x => x.d).filter(x => x.g === gid).sort((a, b) => a.cuando.localeCompare(b.cuando)).forEach(x => { const al = alumno(x.s); filas.push([g.nombre, x.f, x.s, al ? nombreCompleto(al) : '', ESTADO_TXT[x.de || ''], ESTADO_TXT[x.a || ''], fmtHora(new Date(x.cuando))]); });
+      descargar(`correcciones_${gid}_${hoy()}.csv`, aCSV(filas), 'text/csv;charset=utf-8');
     } else if (acc === 'borrar-dia') {
       const f = $('#dia-borrar').value; if (!f) return;
       const regs = vivos('r').filter(r => r.d.g === gid && r.d.f === f && r.d.e);
@@ -1422,6 +1467,12 @@ async function iniciar() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { if (S.fechaLista < hoy() && S.vistaActual !== 'lista') S.fechaLista = hoy(); sincronizar(false); } });
   document.addEventListener('focusout', () => { setTimeout(() => { if (S.pendienteRender && !(document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName))) { S.pendienteRender = false; refrescarSiConviene(); } }, 200); });
   setInterval(() => { if (document.visibilityState === 'visible') sincronizar(false); }, 90000);
+  setInterval(() => {
+    if (S.vistaActual !== 'lista' || $('#dlg').open) return;
+    const r = ruta(), g = r.args[0]; if (!g || !grupo(g)) return;
+    const f = S.fechaLista, est = g + '|' + f + '|' + listaBloqueada(g, f) + '|' + bloqueoNatural(f);
+    if (est !== S.estadoBloqueo) { const a = document.activeElement; if (a && a.id === 'buscar') return; const y = window.scrollY; render(); window.scrollTo(0, y); if (listaBloqueada(g, f)) toast('La lista se bloqueó.'); }
+  }, 15000);
   setInterval(() => { if (S.vistaActual === 'horario' && document.visibilityState === 'visible' && !$('#dlg').open) { const x = $('#h-ahora'); if (x) x.innerHTML = tarjetaAhora(horario(), new Date()); } }, 30000);
   alCambiarRuta();
   sincronizar(false);

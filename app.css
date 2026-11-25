@@ -192,3 +192,7 @@ button.h-fila:hover{border-color:#b9a6cf}
 .h-ley{display:flex;gap:.8rem;flex-wrap:wrap;font-size:.82rem;color:var(--tenue);margin-top:.5rem}
 .h-ley span::before{content:"";display:inline-block;width:.8rem;height:.8rem;border-radius:3px;margin-right:.3rem;vertical-align:-1px}
 .h-ley .h-TEC::before{background:#1f4e79}.h-ley .h-ART::before{background:#9a3412}.h-ley .h-TUT::before{background:#166534}
+/* Bloqueo de lista */
+.bloqueo{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between;background:#eef1f5;border:2px solid var(--gris);border-radius:10px;padding:.5rem .7rem;margin:.5rem 0}
+.bloqueo.abierto{background:var(--ambar-f);border-color:var(--ambar)}
+.b-est:disabled,.btn:disabled{opacity:.4;cursor:not-allowed;filter:grayscale(.4)}
